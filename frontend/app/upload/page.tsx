@@ -143,18 +143,18 @@ export default function UploadPage() {
           <Card gradient>
             <CardHeader>
               <CardTitle className="text-3xl">📋 CSV Format Requirements</CardTitle>
-              <CardDescription className="text-base">Your CSV file should include the following columns</CardDescription>
+              <CardDescription className="text-base">Your CSV file should include the following columns (flexible naming)</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
                 {[
-                  { name: "Street address", required: true },
-                  { name: "City", required: true },
-                  { name: "State", required: true },
-                  { name: "Postal Code", required: true },
-                  { name: "Contact Id", required: false },
-                  { name: "First Name", required: false },
-                  { name: "Last Name", required: false },
+                  { name: "Street Address", alternatives: "Property Address, Address", required: true },
+                  { name: "City", alternatives: "Property City", required: true },
+                  { name: "State", alternatives: "Property State, St", required: true },
+                  { name: "Zip Code", alternatives: "Property Zip, Postal Code", required: true },
+                  { name: "Contact Id", alternatives: "", required: false },
+                  { name: "First Name", alternatives: "", required: false },
+                  { name: "Last Name", alternatives: "", required: false },
                 ].map((column) => (
                   <motion.div
                     key={column.name}
@@ -163,7 +163,12 @@ export default function UploadPage() {
                     whileHover={{ scale: 1.02 }}
                     className="flex items-center justify-between p-4 bg-white rounded-xl shadow-md hover:shadow-lg transition-all duration-300 border border-slate-100"
                   >
-                    <span className="text-base font-bold text-slate-900">{column.name}</span>
+                    <div>
+                      <span className="text-base font-bold text-slate-900">{column.name}</span>
+                      {column.alternatives && (
+                        <p className="text-xs text-slate-500 mt-1">Also accepts: {column.alternatives}</p>
+                      )}
+                    </div>
                     {column.required ? (
                       <span className="inline-flex items-center gap-2 px-4 py-2 text-sm font-bold bg-gradient-to-r from-red-500 to-red-600 text-white rounded-full shadow-lg shadow-red-500/30">
                         <AlertCircle className="h-4 w-4" />

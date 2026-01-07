@@ -118,6 +118,53 @@ async def process_csv(
         if total_rows > 20000:
             raise HTTPException(status_code=400, detail="Maximum 20,000 properties per upload")
 
+        # Validate required columns exist
+        if rows:
+            sample_row = rows[0]
+
+            # Check for address column
+            has_street = get_csv_field(sample_row,
+                'Street Address', 'Street address', 'street_address',
+                'Property Address', 'Property address', 'property_address',
+                'Address', 'address', 'STREET', 'PROPERTY ADDRESS'
+            )
+
+            # Check for city column
+            has_city = get_csv_field(sample_row,
+                'City', 'city', 'CITY',
+                'Property City', 'Property city', 'property_city',
+                'PROPERTY CITY'
+            )
+
+            # Check for state column
+            has_state = get_csv_field(sample_row,
+                'State', 'state', 'STATE',
+                'Property State', 'Property state', 'property_state',
+                'PROPERTY STATE', 'St', 'ST'
+            )
+
+            # Check for zip column
+            has_zip = get_csv_field(sample_row,
+                'Postal Code', 'postal_code', 'POSTAL CODE',
+                'Property Zip', 'Property zip', 'property_zip',
+                'PROPERTY ZIP', 'Zip Code', 'zip_code', 'Zip', 'zip', 'ZIP'
+            )
+
+            missing_columns = []
+            if not has_street:
+                missing_columns.append("Street Address (or Property Address)")
+            if not has_city:
+                missing_columns.append("City (or Property City)")
+            if not has_state:
+                missing_columns.append("State (or Property State)")
+            if not has_zip:
+                missing_columns.append("ZIP Code (or Property Zip)")
+
+            if missing_columns:
+                error_msg = f"Missing required columns: {', '.join(missing_columns)}. Available columns: {', '.join(sample_row.keys())}"
+                logger.error(f"CSV validation failed: {error_msg}")
+                raise HTTPException(status_code=400, detail=error_msg)
+
         # Create upload record
         upload_id = uuid.uuid4()
         upload = Upload(
