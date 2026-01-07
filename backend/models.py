@@ -1,5 +1,5 @@
 from sqlalchemy import Column, Integer, String, Float, Boolean, Text, DateTime, ForeignKey
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
 import uuid
@@ -57,6 +57,9 @@ class Property(Base):
     legal_description = Column(Text)
     lot_size_acres = Column(Float)
     lot_size_sqft = Column(Float)
+
+    # Original CSV data preservation (stores entire row as JSON)
+    original_data = Column(JSONB)
 
     created_at = Column(DateTime, server_default=func.current_timestamp())
 

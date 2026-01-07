@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Map, Home, FileText, Sparkles } from "lucide-react";
+import { Map, Home, FileText, Sparkles, Search } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
@@ -11,6 +11,7 @@ export function Header() {
   const navItems = [
     { href: "/", label: "Dashboard", icon: Home },
     { href: "/upload", label: "Upload", icon: FileText },
+    { href: "/lookup", label: "Find Results", icon: Search },
   ];
 
   return (

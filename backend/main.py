@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, BackgroundTasks, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -148,17 +148,54 @@ async def process_csv(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def get_csv_field(row: dict, *field_names) -> Optional[str]:
+    """
+    Flexibly extract field from CSV row with multiple possible column names.
+    Case-insensitive, strips whitespace.
+    """
+    for field_name in field_names:
+        # Try exact match first
+        if field_name in row and row[field_name]:
+            return str(row[field_name]).strip()
+
+        # Try case-insensitive match
+        for key, value in row.items():
+            if key.strip().lower() == field_name.lower() and value:
+                return str(value).strip()
+
+    return None
+
+
 def process_single_property(row: dict, idx: int, upload_id: uuid.UUID):
     """Process a single property (used in batch processing)"""
     from database import SessionLocal
     db = SessionLocal()
 
     try:
-        # Extract address components
-        street = row.get('Street Address') or row.get('Street address') or row.get('street_address') or row.get('address')
-        city = row.get('City') or row.get('city')
-        state = row.get('State') or row.get('state')
-        postal_code = row.get('Postal Code') or row.get('postal_code') or row.get('zip')
+        # Extract address components with flexible column matching
+        street = get_csv_field(row,
+            'Street Address', 'Street address', 'street_address',
+            'Property Address', 'Property address', 'property_address',
+            'Address', 'address', 'STREET', 'PROPERTY ADDRESS'
+        )
+
+        city = get_csv_field(row,
+            'City', 'city', 'CITY',
+            'Property City', 'Property city', 'property_city',
+            'PROPERTY CITY'
+        )
+
+        state = get_csv_field(row,
+            'State', 'state', 'STATE',
+            'Property State', 'Property state', 'property_state',
+            'PROPERTY STATE', 'St', 'ST'
+        )
+
+        postal_code = get_csv_field(row,
+            'Postal Code', 'postal_code', 'POSTAL CODE',
+            'Property Zip', 'Property zip', 'property_zip',
+            'PROPERTY ZIP', 'Zip Code', 'zip_code', 'Zip', 'zip', 'ZIP'
+        )
 
         if not all([street, city, state, postal_code]):
             logger.warning(f"Row {idx + 1}: Missing required address fields - Street: {street}, City: {city}, State: {state}, ZIP: {postal_code}")
@@ -174,13 +211,27 @@ def process_single_property(row: dict, idx: int, upload_id: uuid.UUID):
         # Log geocoding source for monitoring
         logger.info(f"Row {idx + 1}: Geocoded via {geocode_result.get('source', 'unknown')} (accuracy: {geocode_result.get('accuracy', 'unknown')})")
 
+        # Extract optional fields with flexible matching
+        contact_id = get_csv_field(row, 'Contact ID', 'contact_id', 'Contact Id', 'ContactID')
+        first_name = get_csv_field(row, 'First Name', 'first_name', 'FirstName', 'First')
+        last_name = get_csv_field(row, 'Last Name', 'last_name', 'LastName', 'Last')
+        full_name_from_csv = get_csv_field(row, 'Name', 'name', 'Full Name', 'full_name')
+
+        # Create full name
+        if full_name_from_csv:
+            full_name = full_name_from_csv
+        elif first_name or last_name:
+            full_name = f"{first_name or ''} {last_name or ''}".strip()
+        else:
+            full_name = None
+
         # Create property record
         property_record = Property(
             upload_id=upload_id,
-            contact_id=row.get('Contact ID') or row.get('contact_id'),
-            first_name=row.get('First Name') or row.get('first_name'),
-            last_name=row.get('Last Name') or row.get('last_name'),
-            full_name=f"{row.get('First Name', '')} {row.get('Last Name', '')}".strip() or None,
+            contact_id=contact_id,
+            first_name=first_name,
+            last_name=last_name,
+            full_name=full_name,
             street_address=street,
             city=geocode_result['city'],
             state=geocode_result['state'],
@@ -189,7 +240,8 @@ def process_single_property(row: dict, idx: int, upload_id: uuid.UUID):
             full_address=geocode_result['full_address'],
             latitude=geocode_result['latitude'],
             longitude=geocode_result['longitude'],
-            geocode_accuracy=geocode_result.get('accuracy')
+            geocode_accuracy=geocode_result.get('accuracy'),
+            original_data=dict(row)  # Store entire original CSV row
         )
 
         db.add(property_record)
@@ -576,6 +628,107 @@ async def get_results_summary(job_id: str, db: Session = Depends(get_db)):
             "percentages": percentages,
             "risk_factors": risk_factors
         }
+
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job ID format")
+
+
+@app.get("/results/{job_id}/export")
+async def export_results_csv(job_id: str, db: Session = Depends(get_db)):
+    """
+    Export results as CSV with original data + analysis.
+    Preserves all original CSV columns and adds our risk analysis columns.
+    """
+    try:
+        upload_id = uuid.UUID(job_id)
+        upload = db.query(Upload).filter(Upload.id == upload_id).first()
+
+        if not upload:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        # Get all properties with their risk results
+        results = db.query(Property, RiskResult).join(
+            RiskResult, Property.id == RiskResult.property_id
+        ).filter(Property.upload_id == upload_id).all()
+
+        if not results:
+            raise HTTPException(status_code=404, detail="No results found")
+
+        # Create CSV in memory
+        output = io.StringIO()
+
+        # Get all unique column names from original data
+        all_columns = set()
+        for prop, _ in results:
+            if prop.original_data:
+                all_columns.update(prop.original_data.keys())
+
+        # Define our analysis columns
+        analysis_columns = [
+            'Wetlands Status',
+            'Wetlands Source',
+            'Flood Zone',
+            'Flood Severity',
+            'Flood Source',
+            'Slope Percentage',
+            'Slope Severity',
+            'Road Access',
+            'Road Distance (m)',
+            'Road Source',
+            'Landlocked',
+            'Protected Land',
+            'Protected Land Type',
+            'Overall Risk',
+            'Processing Time (s)'
+        ]
+
+        # Combine: Original columns + Our analysis columns
+        fieldnames = list(all_columns) + analysis_columns
+
+        writer = csv.DictWriter(output, fieldnames=fieldnames)
+        writer.writeheader()
+
+        # Write data rows
+        for prop, risk in results:
+            row_data = {}
+
+            # Add original CSV data
+            if prop.original_data:
+                row_data.update(prop.original_data)
+
+            # Add our analysis data
+            row_data.update({
+                'Wetlands Status': 'Yes' if risk.wetlands_status else 'No',
+                'Wetlands Source': risk.wetlands_source,
+                'Flood Zone': risk.flood_zone,
+                'Flood Severity': risk.flood_severity,
+                'Flood Source': risk.flood_source,
+                'Slope Percentage': risk.slope_percentage,
+                'Slope Severity': risk.slope_severity,
+                'Road Access': 'Yes' if risk.road_access else 'No',
+                'Road Distance (m)': risk.road_distance_meters,
+                'Road Source': risk.road_source,
+                'Landlocked': 'Yes' if risk.landlocked else 'No',
+                'Protected Land': 'Yes' if risk.protected_land else 'No',
+                'Protected Land Type': risk.protected_land_type,
+                'Overall Risk': risk.overall_risk,
+                'Processing Time (s)': risk.processing_time_seconds
+            })
+
+            writer.writerow(row_data)
+
+        # Prepare response
+        csv_content = output.getvalue()
+        output.close()
+
+        # Return CSV file
+        return Response(
+            content=csv_content,
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f"attachment; filename=property_analysis_{job_id}.csv"
+            }
+        )
 
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid job ID format")

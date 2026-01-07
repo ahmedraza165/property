@@ -178,16 +178,19 @@ class GISRiskService:
     def check_flood_zone(self, latitude: float, longitude: float,
                          city: str = None, state: str = None) -> Dict:
         """
-        Check FEMA flood zone
-        
-        Primary: FEMA Map Service Center API  
-        Alternative: FEMA National Flood Hazard Layer
-        Fallback: Geographic risk assessment
+        Check FEMA flood zone with improved accuracy
+
+        Tries multiple FEMA APIs in order:
+        1. FEMA NFHL (National Flood Hazard Layer) - Most accurate
+        2. FEMA MSC (Map Service Center) - Alternative source
+        3. Geographic heuristics - Fallback
         """
-        # Try primary FEMA MSC API
+        api_results = []
+
+        # Try primary FEMA NFHL API
         try:
             url = "https://hazards.fema.gov/gis/nfhl/rest/services/public/NFHL/MapServer/28/query"
-            
+
             params = {
                 "geometry": f"{longitude},{latitude}",
                 "geometryType": "esriGeometryPoint",
@@ -197,28 +200,42 @@ class GISRiskService:
                 "returnGeometry": "false",
                 "f": "json"
             }
-            
+
             response = self.session.get(url, params=params, timeout=15)
-            
+
             if response.status_code == 200:
                 data = response.json()
-                
-                if data.get("features"):
+
+                if data.get("features") and len(data["features"]) > 0:
                     feature = data["features"][0]
-                    zone = feature["attributes"].get("FLD_ZONE", "X")
-                    sfha = feature["attributes"].get("SFHA_TF", "F")
-                    
+                    attrs = feature["attributes"]
+                    zone = attrs.get("FLD_ZONE", "X").strip()
+                    zone_subty = attrs.get("ZONE_SUBTY", "").strip()
+                    sfha = attrs.get("SFHA_TF", "F")
+
+                    # Combine zone and subtype for more detail
+                    if zone_subty:
+                        full_zone = f"{zone} ({zone_subty})"
+                    else:
+                        full_zone = zone
+
                     severity = self._classify_flood_zone(zone, sfha)
-                    
+
+                    logger.info(f"FEMA NFHL returned zone: {full_zone}, SFHA: {sfha}")
+
                     return {
-                        "zone": zone,
+                        "zone": full_zone,
                         "severity": severity,
                         "in_sfha": sfha == "T",
                         "confidence": "HIGH",
-                        "source": "FEMA NFHL"
+                        "source": "FEMA NFHL (Verified)"
                     }
+                else:
+                    logger.debug("FEMA NFHL returned no features")
+                    api_results.append(("NFHL", "no_data"))
         except Exception as e:
-            logger.debug(f"FEMA API error: {str(e)}")
+            logger.debug(f"FEMA NFHL API error: {str(e)}")
+            api_results.append(("NFHL", f"error: {str(e)}"))
         
         # Alternative FEMA endpoint
         try:
@@ -297,18 +314,51 @@ class GISRiskService:
         }
 
     def _classify_flood_zone(self, zone: str, sfha: str = None) -> str:
-        """Classify flood zone severity"""
+        """
+        Classify flood zone severity with improved accuracy.
+
+        HIGH RISK zones (Insurance required):
+        - A, AE, AH, AO, A99, AR - 100-year floodplain
+        - V, VE, V1-30 - Coastal high-hazard areas
+
+        MEDIUM RISK zones:
+        - B, X500, X-SHADED - 500-year floodplain (0.2% annual chance)
+
+        LOW RISK zones:
+        - X, X-UNSHADED, C - Minimal flood risk
+        """
         zone = zone.upper() if zone else "X"
-        
-        high_risk = ["A", "AE", "AH", "AO", "A99", "AR", "V", "VE", "V1-30"]
-        moderate_risk = ["B", "X500", "X-SHADED"]
-        
-        if any(z in zone for z in high_risk) or sfha == "T":
+
+        # High risk zones (100-year floodplain)
+        high_risk = ["AE", "AH", "AO", "A99", "AR", "VE"]
+        high_risk_prefixes = ["A ", "V"]
+
+        # Medium risk zones (500-year floodplain)
+        moderate_risk = ["B", "X500", "X-SHADED", "SHADED", "0.2 PCT ANNUAL CHANCE"]
+
+        # Check if in SFHA (Special Flood Hazard Area)
+        if sfha == "T":
             return "HIGH"
-        elif any(z in zone for z in moderate_risk):
+
+        # Check exact matches for high risk
+        if zone in high_risk:
+            return "HIGH"
+
+        # Check if zone starts with high-risk prefix (e.g., "A ", "V")
+        for prefix in high_risk_prefixes:
+            if zone.startswith(prefix):
+                return "HIGH"
+
+        # Check for moderate risk
+        if zone in moderate_risk:
             return "MEDIUM"
-        else:
-            return "LOW"
+
+        # Check if zone contains moderate risk indicators
+        if "SHADED" in zone or "X500" in zone or "0.2" in zone:
+            return "MEDIUM"
+
+        # Default to LOW for X, C, or unknown zones
+        return "LOW"
 
     def check_slope(self, latitude: float, longitude: float, 
                    state: str = None) -> Dict:

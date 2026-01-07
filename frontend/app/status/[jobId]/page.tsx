@@ -8,7 +8,7 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { useJobStatus } from "@/lib/hooks";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
-import { CheckCircle2, MapPin, Droplets, TrendingUp, Car, AlertTriangle, ArrowRight } from "lucide-react";
+import { CheckCircle2, MapPin, Droplets, TrendingUp, Car, AlertTriangle, ArrowRight, Copy, Check } from "lucide-react";
 import { formatNumber } from "@/lib/utils";
 
 interface ProcessingStepProps {
@@ -138,7 +138,20 @@ export default function StatusPage({ params }: { params: Promise<{ jobId: string
               <h1 className="text-4xl font-bold text-foreground mb-3">
                 {status.status === "completed" ? "Analysis Complete!" : "Processing Properties"}
               </h1>
-              <p className="text-muted-foreground">{status.filename}</p>
+              <p className="text-muted-foreground mb-2">{status.filename}</p>
+              <div className="inline-flex items-center gap-2 px-4 py-2 bg-blue-50 border border-blue-200 rounded-lg">
+                <p className="text-xs text-blue-600 font-mono">Job ID: {jobId}</p>
+                <button
+                  onClick={() => navigator.clipboard.writeText(jobId)}
+                  className="text-blue-600 hover:text-blue-700 transition-colors"
+                  title="Copy Job ID"
+                >
+                  <Copy className="h-3 w-3" />
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground mt-2">
+                Save this Job ID to access results from any device
+              </p>
             </div>
 
             <Card className="mb-6 p-8">
