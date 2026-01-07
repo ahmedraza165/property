@@ -59,7 +59,8 @@ class Property(Base):
     lot_size_sqft = Column(Float)
 
     # Original CSV data preservation (stores entire row as JSON)
-    original_data = Column(JSONB)
+    # TODO: Uncomment after running: python migrate_original_data.py
+    # original_data = Column(JSONB)
 
     created_at = Column(DateTime, server_default=func.current_timestamp())
 

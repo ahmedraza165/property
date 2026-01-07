@@ -226,23 +226,28 @@ def process_single_property(row: dict, idx: int, upload_id: uuid.UUID):
             full_name = None
 
         # Create property record
-        property_record = Property(
-            upload_id=upload_id,
-            contact_id=contact_id,
-            first_name=first_name,
-            last_name=last_name,
-            full_name=full_name,
-            street_address=street,
-            city=geocode_result['city'],
-            state=geocode_result['state'],
-            postal_code=geocode_result['zip'],
-            county=geocode_result.get('county'),
-            full_address=geocode_result['full_address'],
-            latitude=geocode_result['latitude'],
-            longitude=geocode_result['longitude'],
-            geocode_accuracy=geocode_result.get('accuracy'),
-            original_data=dict(row)  # Store entire original CSV row
-        )
+        property_data = {
+            'upload_id': upload_id,
+            'contact_id': contact_id,
+            'first_name': first_name,
+            'last_name': last_name,
+            'full_name': full_name,
+            'street_address': street,
+            'city': geocode_result['city'],
+            'state': geocode_result['state'],
+            'postal_code': geocode_result['zip'],
+            'county': geocode_result.get('county'),
+            'full_address': geocode_result['full_address'],
+            'latitude': geocode_result['latitude'],
+            'longitude': geocode_result['longitude'],
+            'geocode_accuracy': geocode_result.get('accuracy')
+        }
+
+        # Add original_data only if column exists in model (after migration)
+        if hasattr(Property, 'original_data'):
+            property_data['original_data'] = dict(row)
+
+        property_record = Property(**property_data)
 
         db.add(property_record)
         db.flush()  # Get property ID
