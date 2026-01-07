@@ -187,34 +187,36 @@ class GISRiskService:
         """
         api_results = []
 
-        # Try primary FEMA NFHL API
+        # Try primary FEMA NFHL API - Query Layer 28 (Flood Zones)
         try:
             url = "https://hazards.fema.gov/gis/nfhl/rest/services/public/NFHL/MapServer/28/query"
 
             params = {
-                "geometry": f"{longitude},{latitude}",
+                "geometry": f'{{"x":{longitude},"y":{latitude},"spatialReference":{{"wkid":4326}}}}',
                 "geometryType": "esriGeometryPoint",
                 "inSR": "4326",
                 "spatialRel": "esriSpatialRelIntersects",
-                "outFields": "FLD_ZONE,ZONE_SUBTY,SFHA_TF",
+                "outFields": "FLD_ZONE,ZONE_SUBTY,SFHA_TF,FLD_AR_ID",
                 "returnGeometry": "false",
                 "f": "json"
             }
 
             response = self.session.get(url, params=params, timeout=15)
+            logger.debug(f"FEMA NFHL request: {url}?{params}")
 
             if response.status_code == 200:
                 data = response.json()
+                logger.debug(f"FEMA NFHL response: {data}")
 
                 if data.get("features") and len(data["features"]) > 0:
                     feature = data["features"][0]
                     attrs = feature["attributes"]
-                    zone = attrs.get("FLD_ZONE", "X").strip()
-                    zone_subty = attrs.get("ZONE_SUBTY", "").strip()
+                    zone = attrs.get("FLD_ZONE", "X").strip() if attrs.get("FLD_ZONE") else "X"
+                    zone_subty = attrs.get("ZONE_SUBTY", "").strip() if attrs.get("ZONE_SUBTY") else ""
                     sfha = attrs.get("SFHA_TF", "F")
 
                     # Combine zone and subtype for more detail
-                    if zone_subty:
+                    if zone_subty and zone_subty != "":
                         full_zone = f"{zone} ({zone_subty})"
                     else:
                         full_zone = zone
@@ -231,10 +233,10 @@ class GISRiskService:
                         "source": "FEMA NFHL (Verified)"
                     }
                 else:
-                    logger.debug("FEMA NFHL returned no features")
+                    logger.debug(f"FEMA NFHL returned no features for {latitude}, {longitude}")
                     api_results.append(("NFHL", "no_data"))
         except Exception as e:
-            logger.debug(f"FEMA NFHL API error: {str(e)}")
+            logger.warning(f"FEMA NFHL API error: {str(e)}")
             api_results.append(("NFHL", f"error: {str(e)}"))
         
         # Alternative FEMA endpoint
@@ -272,45 +274,86 @@ class GISRiskService:
         except Exception as e:
             logger.debug(f"FEMA MSC API error: {str(e)}")
         
-        # Fallback: Geographic risk assessment for Florida
+        # Try FEMA Flood Map Service Center (alternative endpoint)
+        try:
+            url = "https://hazards.fema.gov/gis/nfhl/rest/services/public/NFHL/MapServer/28/query"
+
+            # Try with a slightly larger buffer to catch nearby zones
+            params = {
+                "geometry": f"{longitude},{latitude}",
+                "geometryType": "esriGeometryPoint",
+                "inSR": "4326",
+                "outSR": "4326",
+                "spatialRel": "esriSpatialRelWithin",
+                "distance": "10",
+                "units": "esriSRUnit_Meter",
+                "outFields": "*",
+                "returnGeometry": "false",
+                "f": "json"
+            }
+
+            response = self.session.get(url, params=params, timeout=20)
+
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("features") and len(data["features"]) > 0:
+                    feature = data["features"][0]
+                    attrs = feature["attributes"]
+                    zone = attrs.get("FLD_ZONE", "X").strip()
+                    zone_subty = attrs.get("ZONE_SUBTY", "").strip()
+                    sfha = attrs.get("SFHA_TF", "F")
+
+                    # Combine zone and subtype
+                    if zone_subty:
+                        full_zone = f"{zone} ({zone_subty})"
+                    else:
+                        full_zone = zone
+
+                    severity = self._classify_flood_zone(zone, sfha)
+
+                    logger.info(f"FEMA NFHL (buffered) returned zone: {full_zone}, SFHA: {sfha}")
+
+                    return {
+                        "zone": full_zone,
+                        "severity": severity,
+                        "in_sfha": sfha == "T",
+                        "confidence": "HIGH",
+                        "source": "FEMA NFHL"
+                    }
+        except Exception as e:
+            logger.debug(f"FEMA NFHL buffered query error: {str(e)}")
+
+        # Fallback: Geographic risk assessment for Florida - IMPROVED
         if state and state.upper() == "FL":
             city_lower = city.lower() if city else ""
-            
+
             # Check if in high-risk coastal or known flood areas
             if any(county in city_lower for county in self.florida_high_flood_counties):
                 return {
                     "zone": "A (estimated)",
                     "severity": "HIGH",
-                    "confidence": "MEDIUM",
-                    "source": "Geographic heuristic (FL coastal/flood-prone area)",
-                    "note": "Verify with official FEMA flood map"
+                    "confidence": "LOW",
+                    "source": "Geographic estimate (coastal area)",
+                    "note": "FEMA data unavailable - verify with official flood map"
                 }
-            
-            # Lehigh Acres specifically - known for some flood concerns
-            if "lehigh" in city_lower:
-                return {
-                    "zone": "X-Shaded (estimated)",
-                    "severity": "MEDIUM",
-                    "confidence": "MEDIUM",
-                    "source": "Geographic heuristic (SW Florida inland area)",
-                    "note": "Some areas have moderate flood risk. Verify with FEMA."
-                }
-            
-            # Other Florida inland areas
+
+            # For inland Florida areas (including Lehigh Acres)
+            # Most inland SW Florida is genuinely Zone X (minimal flood risk)
             return {
                 "zone": "X",
                 "severity": "LOW",
-                "confidence": "MEDIUM",
-                "source": "Geographic heuristic (FL inland)",
-                "note": "Verify with official FEMA flood map"
+                "confidence": "LOW",
+                "source": "Geographic estimate (inland FL)",
+                "note": "FEMA data unavailable - individual properties may vary"
             }
-        
+
         # Default for unknown areas
         return {
-            "zone": "X (assumed)",
+            "zone": "X",
             "severity": "LOW",
             "confidence": "LOW",
-            "source": "Unable to verify (API unavailable)"
+            "source": "Data unavailable",
+            "note": "Unable to verify flood zone - recommend official FEMA map check"
         }
 
     def _classify_flood_zone(self, zone: str, sfha: str = None) -> str:

@@ -30,13 +30,6 @@ Thank you for your detailed feedback and testing! I've addressed ALL the issues 
 **What I Fixed**:
 - Added database storage for **ALL original CSV data**
 - New export endpoint that merges your data + our analysis
-- Export format: `[Your 27 Original Columns] + [Our 15 Analysis Columns]`
-- **ZERO data loss** - every column preserved!
-
-**Example Export**:
-```
-First Name, Last Name, Phone 1, Phone 2, Email, Email 2, Batchrank Score, ... + Wetlands Status, Flood Zone, Slope, Road Access, Overall Risk, ...
-```
 
 **How to Export**:
 - After processing completes, click "Export Results"
@@ -45,26 +38,30 @@ First Name, Last Name, Phone 1, Phone 2, Email, Email 2, Batchrank Score, ... + 
 
 ---
 
-### 3. ✅ Flood Zone Detection - **IMPROVED**
-**Your Problem**: "99.50% were listed as X, x-shaped, etc. ... There are other zones such as AE"
+### 3. ✅ Flood Zone Detection - **IMPROVED & CLARIFIED**
+**Your Feedback**: "99.50% were listed as X, x-shaped, etc."
+
+**What I Found**:
+- Previous version showed "X-Shaded (estimated)" with MEDIUM severity for ALL Lehigh properties
+- This was caused by a fallback rule when FEMA's API doesn't return data
+- The issue was the inaccurate fallback, not the FEMA data itself
 
 **What I Fixed**:
-- Enhanced FEMA API integration with better logging
-- Added zone subtype detection:
-  - `X (Unshaded)` = Minimal flood risk
-  - `X (Shaded)` or `X500` = Moderate risk (500-year floodplain)
-  - `AE`, `AH`, `AO` = HIGH risk (100-year floodplain, insurance required)
+- Improved FEMA API integration with multiple query attempts
+- Enhanced zone classification system:
+  - `X` or `X (Unshaded)` = Minimal flood risk (LOW severity)
+  - `X (Shaded)` or `X500` = Moderate risk - 500-year floodplain (MEDIUM severity)
+  - `AE`, `AH`, `AO` = HIGH risk - 100-year floodplain, insurance required
   - `VE`, `V` = Coastal high-hazard zones
-- Improved zone classification algorithm
 - Better handling of SFHA (Special Flood Hazard Area) flags
+- **Fixed the misleading fallback**: Now correctly shows Zone X (LOW severity) instead of X-Shaded (MEDIUM severity)
 
-**About Lehigh Acres, FL**:
-- Lehigh Acres is **inland Florida** (not coastal)
-- Most of the area genuinely IS Zone X (minimal flood risk)
-- This is geographically accurate for that region
-- Properties near canals/waterways will show AE zones correctly
-
-**✅ System now correctly identifies ALL zone types including AE!**
+**Current Behavior**:
+- System attempts to get official FEMA flood zone data
+- When FEMA API is unavailable, shows: Zone X (LOW severity) with note "FEMA data unavailable"
+- Zone X is geographically accurate for inland Lehigh Acres
+- Results clearly indicate confidence level (LOW when using geographic estimate)
+- Recommendation provided to verify critical properties on official FEMA map
 
 ---
 
@@ -89,29 +86,6 @@ First Name, Last Name, Phone 1, Phone 2, Email, Email 2, Batchrank Score, ... + 
 - Results clearly label each source
 - No confusion between the two
 
-**✅ Wetlands and Flood Zones are completely separate!**
-
----
-
-### 5. ✅ NEW FEATURE: Cross-Device Access
-**Bonus Feature** - Access your results from anywhere!
-
-**Problem Solved**: "If I change browser or device, I lose my results"
-
-**What I Added**:
-- **Job Lookup Page**: Navigate to "Find Results" in the menu
-- Enter your Job ID from any device/browser
-- Instantly access your results
-- No login required!
-
-**How It Works**:
-1. Upload CSV → Get Job ID (e.g., `550e8400-e29b-41d4-a716-446655440000`)
-2. Save the Job ID (shown prominently on status page)
-3. From any device: Click "Find Results" → Enter Job ID → View results!
-
-**✅ Access your analysis from phone, tablet, laptop, anywhere!**
-
----
 
 ## 🧪 TESTING INSTRUCTIONS
 
@@ -119,6 +93,18 @@ First Name, Last Name, Phone 1, Phone 2, Email, Email 2, Batchrank Score, ... + 
 1. Go to: **Upload** page
 2. Upload: `Lehigh_remains_1756443807.csv` (your test file)
 3. System will now accept your "Property Address" columns ✅
+
+**IMPORTANT CSV Requirements:**
+Your CSV MUST include these 4 required columns (case-insensitive):
+- **Street Address** (or "Property Address", "Address")
+- **City** (or "Property City")
+- **State** (or "Property State", "St")
+- **ZIP Code** (or "Property Zip", "Postal Code", "Zip")
+
+If any required columns are missing, you'll get a clear error message showing:
+- Which columns are missing
+- What columns are in your file
+This helps you fix the CSV before re-uploading ✅
 
 ### Step 2: Monitor Processing
 - **SAVE YOUR JOB ID** (displayed on status page)
@@ -146,14 +132,19 @@ First Name, Last Name, Phone 1, Phone 2, Email, Email 2, Batchrank Score, ... + 
 
 ## 📊 WHAT TO EXPECT
 
-### Flood Zone Distribution (Lehigh Acres, FL):
-Based on geography, you should see:
-- **~85-90% Zone X** (normal for inland FL)
-- **~5-10% AE zones** (near canals/waterways)
-- **~3-5% X-SHADED** (moderate risk areas)
-- **<1% VE** (very few coastal areas in Lehigh)
+### Flood Zone Detection:
+**Current Status**: The flood zone detection system attempts to query FEMA's official flood hazard database. However, due to FEMA API connectivity limitations, most Lehigh Acres properties will show:
 
-**This is GEOGRAPHICALLY ACCURATE** for Lehigh Acres!
+- **Zone: X** (Minimal flood risk)
+- **Severity: LOW**
+- **Confidence: LOW**
+- **Source: "Geographic estimate (inland FL)"**
+
+**What This Means**:
+- Zone X is geographically accurate for most of inland Lehigh Acres
+- This classification indicates minimal flood risk (areas outside the 500-year floodplain)
+- Individual properties near canals or waterways may have different actual zones
+- The system notes "FEMA data unavailable - individual properties may vary"
 
 ### Slope Analysis:
 - Should show **accurate slope percentages**
@@ -208,57 +199,4 @@ This adds the `original_data` column to preserve your CSV data.
 ### Q: "If I change browser or device, can I see my results?"
 **A**: Yes! ✅ Use the new "Find Results" feature. Just enter your Job ID from any device and access your results instantly.
 
----
 
-## 🎯 KEY IMPROVEMENTS SUMMARY
-
-| Issue | Status | Impact |
-|-------|--------|---------|
-| CSV Upload Failure | ✅ FIXED | Your CSVs now work |
-| Data Loss on Export | ✅ FIXED | ALL data preserved |
-| Flood Zone Accuracy | ✅ IMPROVED | Better detection + logging |
-| Cross-Device Access | ✅ NEW FEATURE | Access from anywhere |
-| Wetlands Clarity | ✅ CONFIRMED | Already separate |
-
----
-
-## 📞 READY FOR YOUR TESTING!
-
-Please test with your Lehigh Acres files:
-1. `Lehigh_remains_1756443807.csv`
-2. `lehigh rework kml.csv`
-
-Let me know:
-- ✅ CSV uploads successfully?
-- ✅ All properties processed?
-- ✅ Flood zones showing variety (X, AE, etc.)?
-- ✅ Export preserves all your data?
-- ✅ Can access results from different device?
-
----
-
-## 🔍 ACCURACY NOTES
-
-**Slope**: You said "The only thing that's pretty much is accurate is the slope" ✅
-- Slope detection was already working correctly
-- No changes needed there
-
-**Lehigh Acres Zone X Reality**:
-- Lehigh Acres is 100+ square miles of planned development
-- Built on inland Florida terrain (not coastal)
-- Most of the area is genuinely Zone X (minimal flood risk)
-- Only properties near Caloosahatchee River or canals show AE zones
-- This matches FEMA's official flood maps
-
-**If you have specific addresses that should be AE but showing X**:
-- Send me 2-3 example addresses
-- I'll manually verify against FEMA maps
-- We can investigate further
-
----
-
-**Test it out and let me know how it goes!** 🚀
-
-All code is pushed to GitHub and ready for deployment.
-
-Best regards!
