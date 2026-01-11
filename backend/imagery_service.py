@@ -1,5 +1,6 @@
 import requests
 import logging
+import base64
 from typing import Dict, Optional, Tuple
 from datetime import datetime, timedelta
 
@@ -30,7 +31,12 @@ class ImageryService:
         cache_db=None
     ) -> Dict[str, any]:
         """
-        Fetch both satellite and street-level imagery for a property.
+        Fetch satellite and multiple street-level imagery angles for a property.
+        Returns URLs for frontend display + base64 for AI analysis.
+
+        NEW: Fetches 3 images total:
+        - 1 satellite (top view with marker)
+        - 2 street views (different angles for better AI analysis)
 
         Args:
             latitude: Property latitude
@@ -38,60 +44,203 @@ class ImageryService:
             cache_db: Optional database session for caching
 
         Returns:
-            Dictionary with satellite and street image URLs and metadata
+            Dictionary with:
+            - satellite: {url, base64, source, error}
+            - street_view_1: {url, base64, source, error, heading}
+            - street_view_2: {url, base64, source, error, heading}
         """
         result = {
             "satellite": {
                 "url": None,
+                "base64": None,
                 "source": None,
                 "error": None
             },
-            "street": {
+            "street_view_1": {
                 "url": None,
+                "base64": None,
                 "source": None,
-                "error": None
+                "error": None,
+                "heading": 0
+            },
+            "street_view_2": {
+                "url": None,
+                "base64": None,
+                "source": None,
+                "error": None,
+                "heading": 180
             }
         }
 
-        # Check cache first
-        if cache_db:
-            cached_satellite = self._get_cached_image(
-                cache_db, latitude, longitude, "satellite"
-            )
-            cached_street = self._get_cached_image(
-                cache_db, latitude, longitude, "street"
-            )
+        # Fetch MARKED satellite imagery (Mapbox with red marker)
+        logger.info("Fetching marked satellite imagery (top view)...")
+        satellite_data = self._fetch_marked_satellite(latitude, longitude)
+        result["satellite"] = satellite_data
 
-            if cached_satellite:
-                result["satellite"] = cached_satellite
-            if cached_street:
-                result["street"] = cached_street
+        # Fetch Google Street View - Angle 1 (heading 0 degrees - North)
+        logger.info("Fetching Street View - Angle 1 (heading 0°)...")
+        street_data_1 = self._fetch_google_streetview(latitude, longitude, heading=0)
+        result["street_view_1"] = street_data_1
 
-        # Fetch satellite imagery if not cached
-        if not result["satellite"]["url"]:
-            satellite_data = self._fetch_satellite_imagery(latitude, longitude)
-            result["satellite"] = satellite_data
-
-            # Cache the result
-            if cache_db and satellite_data["url"]:
-                self._cache_image(
-                    cache_db, latitude, longitude, "satellite",
-                    satellite_data["url"], satellite_data["source"]
-                )
-
-        # Fetch street imagery if not cached
-        if not result["street"]["url"]:
-            street_data = self._fetch_street_imagery(latitude, longitude)
-            result["street"] = street_data
-
-            # Cache the result
-            if cache_db and street_data["url"]:
-                self._cache_image(
-                    cache_db, latitude, longitude, "street",
-                    street_data["url"], street_data["source"]
-                )
+        # Fetch Google Street View - Angle 2 (heading 180 degrees - South, opposite direction)
+        logger.info("Fetching Street View - Angle 2 (heading 180°)...")
+        street_data_2 = self._fetch_google_streetview(latitude, longitude, heading=180)
+        result["street_view_2"] = street_data_2
 
         return result
+
+    def _fetch_marked_satellite(
+        self,
+        latitude: float,
+        longitude: float
+    ) -> Dict[str, any]:
+        """
+        Fetch Google Maps satellite imagery with red marker.
+        Returns both URL (for frontend) and base64 (for AI).
+        """
+        import os
+
+        api_key = os.getenv('GOOGLE_MAPS_API_KEY')
+        if not api_key:
+            logger.error("GOOGLE_MAPS_API_KEY not set")
+            return {
+                "url": None,
+                "base64": None,
+                "source": None,
+                "error": "Google Maps API key not configured"
+            }
+
+        # Build Google Maps Static API satellite URL with marker
+        zoom = 18
+        width = 800
+        height = 800
+
+        # Google Static Maps with satellite + marker
+        url = (
+            f"https://maps.googleapis.com/maps/api/staticmap?"
+            f"center={latitude},{longitude}"
+            f"&zoom={zoom}"
+            f"&size={width}x{height}"
+            f"&maptype=satellite"
+            f"&markers=color:red%7C{latitude},{longitude}"
+            f"&key={api_key}"
+        )
+
+        # Download image and convert to base64
+        try:
+            logger.info(f"Downloading satellite image from Google Maps Static API...")
+            response = self.session.get(url, timeout=30)
+            response.raise_for_status()
+
+            image_bytes = response.content
+            image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+            base64_url = f"data:image/jpeg;base64,{image_base64}"
+
+            logger.info(f"✅ Google satellite image downloaded ({len(image_bytes)} bytes)")
+
+            return {
+                "url": url,
+                "base64": base64_url,
+                "source": "Google Maps Satellite",
+                "error": None
+            }
+        except Exception as e:
+            logger.error(f"Failed to fetch Google satellite: {str(e)}")
+            return {
+                "url": None,
+                "base64": None,
+                "source": None,
+                "error": str(e)
+            }
+
+    def _fetch_google_streetview(
+        self,
+        latitude: float,
+        longitude: float,
+        heading: int = 0
+    ) -> Dict[str, any]:
+        """
+        Fetch Google Street View image with specific heading angle.
+        Returns both URL (for frontend) and base64 (for AI).
+
+        Args:
+            latitude: Property latitude
+            longitude: Property longitude
+            heading: Camera heading (0-360 degrees, 0=North, 90=East, 180=South, 270=West)
+        """
+        import os
+
+        api_key = os.getenv('GOOGLE_MAPS_API_KEY')
+        if not api_key:
+            logger.error("GOOGLE_MAPS_API_KEY not set")
+            return {
+                "url": None,
+                "base64": None,
+                "source": None,
+                "error": "Google Maps API key not configured",
+                "heading": heading
+            }
+
+        # Check if Street View is available
+        metadata_url = (
+            f"https://maps.googleapis.com/maps/api/streetview/metadata?"
+            f"location={latitude},{longitude}&key={api_key}"
+        )
+
+        try:
+            logger.info(f"Checking Street View availability (heading {heading}°)...")
+            metadata_response = self.session.get(metadata_url, timeout=10)
+            metadata_response.raise_for_status()
+            metadata = metadata_response.json()
+
+            if metadata.get('status') != 'OK':
+                logger.warning(f"Street View not available: {metadata.get('status')}")
+                return {
+                    "url": None,
+                    "base64": None,
+                    "source": None,
+                    "error": "Street View not available for this location",
+                    "heading": heading
+                }
+
+            # Build Street View URL with heading parameter
+            width = 800
+            height = 600
+            fov = 90  # Field of view
+            streetview_url = (
+                f"https://maps.googleapis.com/maps/api/streetview?"
+                f"size={width}x{height}&location={latitude},{longitude}"
+                f"&heading={heading}&fov={fov}&pitch=0"
+                f"&key={api_key}"
+            )
+
+            # Download image and convert to base64
+            logger.info(f"Downloading Street View (heading {heading}°) from Google...")
+            response = self.session.get(streetview_url, timeout=30)
+            response.raise_for_status()
+
+            image_bytes = response.content
+            image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+            base64_url = f"data:image/jpeg;base64,{image_base64}"
+
+            logger.info(f"✅ Street View image (heading {heading}°) downloaded ({len(image_bytes)} bytes)")
+
+            return {
+                "url": streetview_url,
+                "base64": base64_url,
+                "source": f"Google Street View (heading {heading}°)",
+                "error": None,
+                "heading": heading
+            }
+        except Exception as e:
+            logger.error(f"Failed to fetch Street View (heading {heading}°): {str(e)}")
+            return {
+                "url": None,
+                "base64": None,
+                "source": None,
+                "error": str(e),
+                "heading": heading
+            }
 
     def _fetch_satellite_imagery(
         self,
@@ -194,12 +343,17 @@ class ImageryService:
         self,
         latitude: float,
         longitude: float,
-        zoom: int = 17,
+        zoom: int = 18,  # Balanced zoom: clear structures + surrounding area
         width: int = 800,
-        height: int = 600
+        height: int = 800  # Square image for better AI analysis
     ) -> Optional[str]:
         """
-        Get Mapbox satellite imagery URL.
+        Get Mapbox satellite imagery URL with property marker.
+
+        Features:
+        - Zoom 18: Shows ~200m radius with clear structures
+        - Red marker: Identifies exact property location for AI
+        - High resolution: @2x for detailed analysis
 
         Note: Requires MAPBOX_ACCESS_TOKEN environment variable.
         Free tier: 50,000 requests/month
@@ -211,16 +365,27 @@ class ImageryService:
             logger.warning("MAPBOX_ACCESS_TOKEN not set")
             return None
 
-        # Mapbox Static Images API
+        # Add red marker pin at property location to help AI identify target
+        # Format: pin-SIZE+COLOR(lon,lat)
+        marker_spec = f"pin-s+ff0000({longitude},{latitude})"
+
+        # Mapbox Static Images API with marker overlay
+        # @2x = high resolution for better AI detection
         url = (
             f"https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/"
-            f"{longitude},{latitude},{zoom}/{width}x{height}?access_token={access_token}"
+            f"{marker_spec}/{longitude},{latitude},{zoom},0/{width}x{height}@2x"
+            f"?access_token={access_token}"
         )
 
+        logger.debug(f"Mapbox satellite URL: zoom={zoom}, marked property at {latitude},{longitude}")
+
         # Verify the URL is accessible
-        response = self.session.head(url, timeout=5)
-        if response.status_code == 200:
-            return url
+        try:
+            response = self.session.head(url, timeout=5)
+            if response.status_code == 200:
+                return url
+        except Exception as e:
+            logger.debug(f"Mapbox URL verification failed: {e}")
 
         return None
 

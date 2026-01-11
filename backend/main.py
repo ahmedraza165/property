@@ -18,6 +18,7 @@ import logging
 import csv
 import io
 import uuid
+import json
 from datetime import datetime
 from typing import Optional, List
 import time
@@ -217,8 +218,13 @@ def process_single_property(row: dict, idx: int, upload_id: uuid.UUID):
     """Process a single property (used in batch processing)"""
     from database import SessionLocal
     db = SessionLocal()
+    property_start_time = time.time()
 
     try:
+        logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        logger.info(f"Processing Property #{idx + 1}")
+        logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
         # Extract address components with flexible column matching
         street = get_csv_field(row,
             'Street Address', 'Street address', 'street_address',
@@ -244,19 +250,23 @@ def process_single_property(row: dict, idx: int, upload_id: uuid.UUID):
             'PROPERTY ZIP', 'Zip Code', 'zip_code', 'Zip', 'zip', 'ZIP'
         )
 
+        logger.info(f"📍 Address: {street}, {city}, {state} {postal_code}")
+
         if not all([street, city, state, postal_code]):
-            logger.warning(f"Row {idx + 1}: Missing required address fields - Street: {street}, City: {city}, State: {state}, ZIP: {postal_code}")
+            logger.error(f"❌ Row {idx + 1}: Missing required address fields - Street: {street}, City: {city}, State: {state}, ZIP: {postal_code}")
             return False
 
         # Geocode address with fallback
+        logger.info(f"🌍 Step 1/3: Geocoding address...")
         geocode_result = geocoding_service.geocode_address(street, city, state, postal_code)
 
         if not geocode_result:
-            logger.warning(f"Row {idx + 1}: All geocoding methods failed for {street}, {city}, {state} {postal_code}")
+            logger.error(f"❌ Row {idx + 1}: All geocoding methods failed for {street}, {city}, {state} {postal_code}")
             return False
 
         # Log geocoding source for monitoring
-        logger.info(f"Row {idx + 1}: Geocoded via {geocode_result.get('source', 'unknown')} (accuracy: {geocode_result.get('accuracy', 'unknown')})")
+        logger.info(f"✅ Geocoded via {geocode_result.get('source', 'unknown')} (accuracy: {geocode_result.get('accuracy', 'unknown')})")
+        logger.info(f"   Coordinates: ({geocode_result['latitude']}, {geocode_result['longitude']})")
 
         # Extract optional fields with flexible matching
         contact_id = get_csv_field(row, 'Contact ID', 'contact_id', 'Contact Id', 'ContactID')
@@ -290,16 +300,17 @@ def process_single_property(row: dict, idx: int, upload_id: uuid.UUID):
             'geocode_accuracy': geocode_result.get('accuracy')
         }
 
-        # Add original_data only if column exists in model (after migration)
-        if hasattr(Property, 'original_data'):
-            property_data['original_data'] = dict(row)
+        # Store entire original CSV row for export preservation
+        property_data['original_data'] = dict(row)
 
         property_record = Property(**property_data)
 
         db.add(property_record)
         db.flush()  # Get property ID
+        logger.info(f"✅ Property record created (ID: {property_record.id})")
 
         # Perform GIS risk analysis with proper parameters
+        logger.info(f"🗺️  Step 2/3: Performing GIS risk analysis...")
         risk_analysis = gis_service.analyze_property(
             latitude=geocode_result['latitude'],
             longitude=geocode_result['longitude'],
@@ -307,6 +318,7 @@ def process_single_property(row: dict, idx: int, upload_id: uuid.UUID):
             city=city,
             state=state
         )
+        logger.info(f"✅ GIS analysis complete - Overall Risk: {risk_analysis['overall_risk']}")
 
         # Skip water utility checks (not needed)
 
@@ -342,11 +354,13 @@ def process_single_property(row: dict, idx: int, upload_id: uuid.UUID):
         db.add(risk_result)
         db.commit()
 
-        logger.info(f"Processed property {idx + 1}")
+        processing_time = time.time() - property_start_time
+        logger.info(f"✅ Property #{idx + 1} processed successfully in {processing_time:.2f}s")
+        logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
         return True
 
     except Exception as e:
-        logger.error(f"Error processing row {idx + 1}: {str(e)}")
+        logger.error(f"❌ Error processing row {idx + 1}: {str(e)}", exc_info=True)
         db.rollback()
         return False
     finally:
@@ -556,7 +570,16 @@ async def get_results(
                     "nearby_development": {
                         "type": ai.nearby_dev_type,
                         "count": ai.nearby_dev_count,
-                        "confidence": ai.nearby_dev_confidence
+                        "confidence": ai.nearby_dev_confidence,
+                        "details": getattr(ai, 'nearby_dev_details', None)
+                    },
+                    "nearby_structures": {
+                        "structures_detected": getattr(ai, 'structures_detected', False),
+                        "count": getattr(ai, 'structures_count', None),
+                        "types": json.loads(getattr(ai, 'structures_types', '[]') or '[]'),
+                        "density": getattr(ai, 'structures_density', None),
+                        "confidence": getattr(ai, 'structures_confidence', None),
+                        "details": getattr(ai, 'structures_details', None)
                     },
                     "overall_risk": {
                         "level": ai.ai_risk_level,
@@ -685,11 +708,11 @@ async def get_results_summary(job_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Invalid job ID format")
 
 
-@app.get("/results/{job_id}/export")
-async def export_results_csv(job_id: str, db: Session = Depends(get_db)):
+@app.get("/results/{job_id}/export-status")
+async def get_export_status(job_id: str, db: Session = Depends(get_db)):
     """
-    Export results as CSV with original data + analysis.
-    Preserves all original CSV columns and adds our risk analysis columns.
+    Get the status of what data is available for export.
+    Returns counts of properties with/without AI analysis and owner info.
     """
     try:
         upload_id = uuid.UUID(job_id)
@@ -698,9 +721,75 @@ async def export_results_csv(job_id: str, db: Session = Depends(get_db)):
         if not upload:
             raise HTTPException(status_code=404, detail="Job not found")
 
-        # Get all properties with their risk results
-        results = db.query(Property, RiskResult).join(
+        # Count total properties
+        total_properties = db.query(func.count(Property.id)).filter(
+            Property.upload_id == upload_id
+        ).scalar() or 0
+
+        # Count properties with AI analysis
+        ai_analyzed_count = db.query(func.count(AIAnalysisResult.id)).filter(
+            AIAnalysisResult.upload_id == upload_id,
+            AIAnalysisResult.error_message == None
+        ).scalar() or 0
+
+        # Count properties with owner info
+        owner_info_count = db.query(func.count(PropertyOwnerInfo.id)).filter(
+            PropertyOwnerInfo.upload_id == upload_id,
+            PropertyOwnerInfo.owner_info_status == 'complete'
+        ).scalar() or 0
+
+        # Get original CSV columns from first property
+        first_property = db.query(Property).filter(
+            Property.upload_id == upload_id
+        ).first()
+
+        original_columns = []
+        if first_property and first_property.original_data:
+            original_columns = list(first_property.original_data.keys())
+
+        return {
+            "job_id": job_id,
+            "total_properties": total_properties,
+            "ai_analysis": {
+                "count": ai_analyzed_count,
+                "available": ai_analyzed_count > 0,
+                "complete": ai_analyzed_count == total_properties
+            },
+            "owner_info": {
+                "count": owner_info_count,
+                "available": owner_info_count > 0,
+                "complete": owner_info_count == total_properties
+            },
+            "original_columns": original_columns
+        }
+
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job ID format")
+
+
+@app.get("/results/{job_id}/export")
+async def export_results_csv(job_id: str, db: Session = Depends(get_db)):
+    """
+    Export results as CSV with original data + all analysis.
+    Preserves all original CSV columns and adds:
+    - GIS risk analysis columns
+    - AI analysis columns (if available)
+    - Owner/skip trace columns (if available)
+    """
+    try:
+        upload_id = uuid.UUID(job_id)
+        upload = db.query(Upload).filter(Upload.id == upload_id).first()
+
+        if not upload:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        # Get all properties with their results (LEFT JOIN for optional data)
+        results = db.query(Property, RiskResult, AIAnalysisResult, PropertyOwnerInfo).join(
             RiskResult, Property.id == RiskResult.property_id
+        ).outerjoin(
+            AIAnalysisResult, Property.id == AIAnalysisResult.property_id
+        ).outerjoin(
+            PropertyOwnerInfo, Property.id == PropertyOwnerInfo.property_id
         ).filter(Property.upload_id == upload_id).all()
 
         if not results:
@@ -709,63 +798,156 @@ async def export_results_csv(job_id: str, db: Session = Depends(get_db)):
         # Create CSV in memory
         output = io.StringIO()
 
-        # Get all unique column names from original data
-        all_columns = set()
-        for prop, _ in results:
+        # Get all unique column names from original data (preserve order from first row)
+        original_columns = []
+        for prop, _, _, _ in results:
             if prop.original_data:
-                all_columns.update(prop.original_data.keys())
+                original_columns = list(prop.original_data.keys())
+                break
 
-        # Define our analysis columns
-        analysis_columns = [
+        # Check if we have any AI analysis or owner info
+        has_ai_analysis = any(ai is not None for _, _, ai, _ in results)
+        has_owner_info = any(owner is not None for _, _, _, owner in results)
+
+        # Define GIS analysis columns (always present)
+        gis_columns = [
+            'Latitude',
+            'Longitude',
+            'County',
             'Wetlands Status',
-            'Wetlands Source',
             'Flood Zone',
             'Flood Severity',
-            'Flood Source',
             'Slope Percentage',
             'Slope Severity',
             'Road Access',
             'Road Distance (m)',
-            'Road Source',
             'Landlocked',
             'Protected Land',
             'Protected Land Type',
-            'Overall Risk',
-            'Processing Time (s)'
+            'Overall Risk'
         ]
 
-        # Combine: Original columns + Our analysis columns
-        fieldnames = list(all_columns) + analysis_columns
+        # Define AI analysis columns (if available)
+        ai_columns = []
+        if has_ai_analysis:
+            ai_columns = [
+                'AI Road Condition',
+                'AI Road Confidence',
+                'AI Power Lines Visible',
+                'AI Power Lines Distance (m)',
+                'AI Development Type',
+                'AI Structures Count',
+                'AI Structures Types',
+                'AI Risk Level',
+                'Satellite Image URL',
+                'Street View URL'
+            ]
+
+        # Define owner info columns (if available)
+        owner_columns = []
+        if has_owner_info:
+            owner_columns = [
+                'Owner Name',
+                'Owner Type',
+                'Owner Occupied',
+                'Phone Primary',
+                'Phone Mobile',
+                'Phone Secondary',
+                'Phone Count',
+                'Email Primary',
+                'Email Secondary',
+                'Email Count',
+                'Mailing Street',
+                'Mailing City',
+                'Mailing State',
+                'Mailing Zip',
+                'Is Deceased',
+                'Is Litigator',
+                'Has DNC',
+                'Has TCPA',
+                'Has Bankruptcy'
+            ]
+
+        # Combine: Original columns + GIS + AI + Owner columns
+        fieldnames = original_columns + gis_columns + ai_columns + owner_columns
 
         writer = csv.DictWriter(output, fieldnames=fieldnames)
         writer.writeheader()
 
         # Write data rows
-        for prop, risk in results:
+        for prop, risk, ai, owner in results:
             row_data = {}
 
             # Add original CSV data
             if prop.original_data:
                 row_data.update(prop.original_data)
 
-            # Add our analysis data
+            # Add GIS analysis data
             row_data.update({
+                'Latitude': prop.latitude,
+                'Longitude': prop.longitude,
+                'County': prop.county,
                 'Wetlands Status': 'Yes' if risk.wetlands_status else 'No',
-                'Wetlands Source': risk.wetlands_source,
                 'Flood Zone': risk.flood_zone,
                 'Flood Severity': risk.flood_severity,
-                'Flood Source': risk.flood_source,
                 'Slope Percentage': risk.slope_percentage,
                 'Slope Severity': risk.slope_severity,
                 'Road Access': 'Yes' if risk.road_access else 'No',
                 'Road Distance (m)': risk.road_distance_meters,
-                'Road Source': risk.road_source,
                 'Landlocked': 'Yes' if risk.landlocked else 'No',
                 'Protected Land': 'Yes' if risk.protected_land else 'No',
                 'Protected Land Type': risk.protected_land_type,
-                'Overall Risk': risk.overall_risk,
-                'Processing Time (s)': risk.processing_time_seconds
+                'Overall Risk': risk.overall_risk
             })
+
+            # Add AI analysis data (if columns exist)
+            if has_ai_analysis:
+                if ai:
+                    row_data.update({
+                        'AI Road Condition': ai.road_condition_type,
+                        'AI Road Confidence': f"{int(ai.road_condition_confidence * 100)}%" if ai.road_condition_confidence else '',
+                        'AI Power Lines Visible': 'Yes' if ai.power_lines_visible else 'No',
+                        'AI Power Lines Distance (m)': ai.power_line_distance_meters,
+                        'AI Development Type': ai.nearby_dev_type,
+                        'AI Structures Count': ai.structures_count,
+                        'AI Structures Types': ai.structures_types,
+                        'AI Risk Level': ai.ai_risk_level,
+                        'Satellite Image URL': ai.satellite_image_url,
+                        'Street View URL': ai.street_image_url
+                    })
+                else:
+                    # Empty values for properties without AI analysis
+                    for col in ai_columns:
+                        row_data[col] = ''
+
+            # Add owner info data (if columns exist)
+            if has_owner_info:
+                if owner and owner.owner_info_status == 'complete':
+                    row_data.update({
+                        'Owner Name': owner.owner_full_name or owner.owner_name,
+                        'Owner Type': owner.owner_type,
+                        'Owner Occupied': 'Yes' if owner.owner_occupied else 'No' if owner.owner_occupied is False else '',
+                        'Phone Primary': owner.phone_primary,
+                        'Phone Mobile': owner.phone_mobile,
+                        'Phone Secondary': owner.phone_secondary,
+                        'Phone Count': owner.phone_count,
+                        'Email Primary': owner.email_primary,
+                        'Email Secondary': owner.email_secondary,
+                        'Email Count': owner.email_count,
+                        'Mailing Street': owner.mailing_street,
+                        'Mailing City': owner.mailing_city,
+                        'Mailing State': owner.mailing_state,
+                        'Mailing Zip': owner.mailing_zip,
+                        'Is Deceased': 'Yes' if owner.is_deceased else 'No',
+                        'Is Litigator': 'Yes' if owner.is_litigator else 'No',
+                        'Has DNC': 'Yes' if owner.has_dnc else 'No',
+                        'Has TCPA': 'Yes' if owner.has_tcpa else 'No',
+                        'Has Bankruptcy': 'Yes' if owner.has_bankruptcy else 'No'
+                    })
+                else:
+                    # Empty values for properties without owner info
+                    for col in owner_columns:
+                        row_data[col] = ''
 
             writer.writerow(row_data)
 
@@ -880,12 +1062,20 @@ def process_single_property_ai(property_obj: Property, upload_id: uuid.UUID):
     """Process AI analysis for a single property"""
     from database import SessionLocal
     db = SessionLocal()
+    ai_start_time = time.time()
 
     try:
+        logger.info(f"╔═══════════════════════════════════════════════════════════════╗")
+        logger.info(f"║  AI ANALYSIS - Property ID: {property_obj.id}")
+        logger.info(f"║  Address: {property_obj.full_address}")
+        logger.info(f"╚═══════════════════════════════════════════════════════════════╝")
+
         # Skip if no coordinates
         if not property_obj.latitude or not property_obj.longitude:
-            logger.warning(f"Skipping AI analysis for property {property_obj.id} - no coordinates")
+            logger.error(f"❌ Skipping AI analysis for property {property_obj.id} - no coordinates")
             return False
+
+        logger.info(f"📍 Coordinates: ({property_obj.latitude}, {property_obj.longitude})")
 
         # Check if AI analysis already exists
         existing = db.query(AIAnalysisResult).filter(
@@ -893,12 +1083,13 @@ def process_single_property_ai(property_obj: Property, upload_id: uuid.UUID):
         ).first()
 
         if existing:
-            logger.info(f"AI analysis already exists for property {property_obj.id}")
+            logger.info(f"⏭️  AI analysis already exists for property {property_obj.id}, skipping")
             return True
 
         start_time = time.time()
 
-        # Fetch imagery
+        # Fetch imagery (with base64 for AI) - NOW FETCHES 3 IMAGES
+        logger.info(f"📸 Step 1/3: Fetching imagery (1 satellite + 2 street views)...")
         imagery = imagery_service.fetch_imagery(
             property_obj.latitude,
             property_obj.longitude,
@@ -906,19 +1097,42 @@ def process_single_property_ai(property_obj: Property, upload_id: uuid.UUID):
         )
 
         satellite_url = imagery['satellite']['url']
-        street_url = imagery['street']['url']
+        street_url_1 = imagery['street_view_1']['url']
+        street_url_2 = imagery['street_view_2']['url']
+        satellite_base64 = imagery['satellite']['base64']  # Base64 for AI
+        street_base64_1 = imagery['street_view_1']['base64']  # Base64 for AI (angle 1)
+        street_base64_2 = imagery['street_view_2']['base64']  # Base64 for AI (angle 2)
         satellite_source = imagery['satellite']['source']
-        street_source = imagery['street']['source']
+        street_source_1 = imagery['street_view_1']['source']
+        street_source_2 = imagery['street_view_2']['source']
 
-        # Perform AI analysis
+        if satellite_url:
+            logger.info(f"   ✅ Satellite image: {satellite_source}")
+        else:
+            logger.warning(f"   ⚠️  No satellite image: {imagery['satellite'].get('error')}")
+
+        if street_url_1:
+            logger.info(f"   ✅ Street view 1 (0°): {street_source_1}")
+        else:
+            logger.warning(f"   ⚠️  No street view 1: {imagery['street_view_1'].get('error')}")
+
+        if street_url_2:
+            logger.info(f"   ✅ Street view 2 (180°): {street_source_2}")
+        else:
+            logger.warning(f"   ⚠️  No street view 2: {imagery['street_view_2'].get('error')}")
+
+        # Perform AI analysis using base64 URLs (NOW PASSES 3 IMAGES)
+        logger.info(f"🤖 Step 2/3: Running AI vision analysis with 3 images...")
         ai_result = ai_analysis_service.analyze_property(
             property_obj.latitude,
             property_obj.longitude,
-            satellite_url,
-            street_url
+            satellite_base64,  # Pass base64 instead of regular URL
+            street_base64_1,   # Street view angle 1
+            street_base64_2    # Street view angle 2
         )
 
         processing_time = time.time() - start_time
+        logger.info(f"✅ AI analysis complete in {processing_time:.2f}s")
 
         # Get existing GIS risk result for comparison
         risk_result = db.query(RiskResult).filter(
@@ -971,20 +1185,27 @@ def process_single_property_ai(property_obj: Property, upload_id: uuid.UUID):
             property_id=property_obj.id,
             upload_id=upload_id,
             satellite_image_url=satellite_url,
-            street_image_url=street_url,
+            street_image_url=street_url_1,  # Using first street view for database
             satellite_image_source=satellite_source,
-            street_image_source=street_source,
-            road_condition_type=ai_result['road_condition']['type'] if ai_result['road_condition'] else None,
-            road_condition_confidence=ai_result['road_condition']['confidence'] if ai_result['road_condition'] else None,
-            power_lines_visible=ai_result['power_lines']['visible'] if ai_result['power_lines'] else False,
-            power_line_confidence=ai_result['power_lines']['confidence'] if ai_result['power_lines'] else None,
-            power_line_distance_meters=ai_result['power_lines']['distance_meters'] if ai_result['power_lines'] else None,
-            power_line_geometry=ai_result['power_lines'].get('geometry') if ai_result['power_lines'] else None,
-            nearby_dev_type=ai_result['nearby_development']['type'] if ai_result['nearby_development'] else None,
-            nearby_dev_count=ai_result['nearby_development']['count'] if ai_result['nearby_development'] else None,
-            nearby_dev_confidence=ai_result['nearby_development']['confidence'] if ai_result['nearby_development'] else None,
-            ai_risk_level=ai_result['overall_ai_risk']['level'] if ai_result['overall_ai_risk'] else 'UNKNOWN',
-            ai_risk_confidence=ai_result['overall_ai_risk']['confidence'] if ai_result['overall_ai_risk'] else 0.0,
+            street_image_source=street_source_1,  # Using first street view source
+            road_condition_type=ai_result.get('road_condition', {}).get('type'),
+            road_condition_confidence=ai_result.get('road_condition', {}).get('confidence'),
+            power_lines_visible=ai_result.get('power_lines', {}).get('visible', False),
+            power_line_confidence=ai_result.get('power_lines', {}).get('confidence'),
+            power_line_distance_meters=ai_result.get('power_lines', {}).get('distance_meters'),
+            power_line_geometry=ai_result.get('power_lines', {}).get('geometry'),
+            nearby_dev_type=ai_result.get('nearby_development', {}).get('type'),
+            nearby_dev_count=ai_result.get('nearby_development', {}).get('count'),
+            nearby_dev_confidence=ai_result.get('nearby_development', {}).get('confidence'),
+            nearby_dev_details=ai_result.get('nearby_development', {}).get('details'),
+            structures_detected=ai_result.get('nearby_structures', {}).get('structures_detected', False),
+            structures_count=ai_result.get('nearby_structures', {}).get('count'),
+            structures_types=json.dumps(ai_result.get('nearby_structures', {}).get('types', [])),
+            structures_density=ai_result.get('nearby_structures', {}).get('density'),
+            structures_confidence=ai_result.get('nearby_structures', {}).get('confidence'),
+            structures_details=ai_result.get('nearby_structures', {}).get('details'),
+            ai_risk_level=ai_result.get('overall_ai_risk', {}).get('level', 'UNKNOWN'),
+            ai_risk_confidence=ai_result.get('overall_ai_risk', {}).get('confidence', 0.0),
             processing_time_seconds=processing_time,
             error_message=ai_result.get('error'),
             model_version='v1.0'
@@ -993,11 +1214,14 @@ def process_single_property_ai(property_obj: Property, upload_id: uuid.UUID):
         db.add(ai_record)
         db.commit()
 
-        logger.info(f"AI analysis completed for property {property_obj.id}")
+        total_time = time.time() - ai_start_time
+        logger.info(f"✅ AI analysis saved to database")
+        logger.info(f"🏁 Property {property_obj.id} AI processing complete in {total_time:.2f}s")
+        logger.info(f"╚═══════════════════════════════════════════════════════════════╝\n")
         return True
 
     except Exception as e:
-        logger.error(f"Error processing AI for property {property_obj.id}: {str(e)}")
+        logger.error(f"❌ Error processing AI for property {property_obj.id}: {str(e)}", exc_info=True)
         db.rollback()
 
         # Store error record
@@ -1065,7 +1289,16 @@ async def get_ai_results(job_id: str, db: Session = Depends(get_db)):
                 "nearby_development": {
                     "type": ai.nearby_dev_type,
                     "count": ai.nearby_dev_count,
-                    "confidence": ai.nearby_dev_confidence
+                    "confidence": ai.nearby_dev_confidence,
+                    "details": getattr(ai, 'nearby_dev_details', None)
+                },
+                "nearby_structures": {
+                    "structures_detected": getattr(ai, 'structures_detected', False),
+                    "count": getattr(ai, 'structures_count', None),
+                    "types": json.loads(getattr(ai, 'structures_types', '[]') or '[]'),
+                    "density": getattr(ai, 'structures_density', None),
+                    "confidence": getattr(ai, 'structures_confidence', None),
+                    "details": getattr(ai, 'structures_details', None)
                 },
                 "overall_ai_risk": {
                     "level": ai.ai_risk_level,
@@ -1194,7 +1427,7 @@ def process_skip_trace(upload_id: str):
 
 
 def process_single_property_skip_trace(property_id: int, upload_id: str):
-    """Process skip tracing for a single property"""
+    """Process skip tracing for a single property using BatchData API"""
     db = SessionLocal()
 
     try:
@@ -1206,20 +1439,20 @@ def process_single_property_skip_trace(property_id: int, upload_id: str):
 
         logger.info(f"Skip tracing property: {prop.full_address}")
 
-        # Perform skip trace
+        # Perform skip trace with BatchData API
         result = skip_trace_service.skip_trace_property(
             property_address=prop.street_address,
             city=prop.city,
             state=prop.state,
             zip_code=prop.postal_code,
-            property_id=property_id
+            owner_name=f"{prop.first_name or ''} {prop.last_name or ''}".strip() or None
         )
 
         # Create owner info record
         owner_info = PropertyOwnerInfo(
             property_id=property_id,
             upload_id=uuid.UUID(upload_id),
-            source=result.get('source', 'Unknown'),
+            source=result.get('source', 'BatchData API'),
             confidence_score=result.get('confidence_score', 0.0),
             processing_time_seconds=result.get('processing_time_seconds', 0.0),
             owner_info_status='complete' if result.get('owner_found') else 'not_found',
@@ -1237,28 +1470,59 @@ def process_single_property_skip_trace(property_id: int, upload_id: str):
             owner_info.owner_full_name = owner_data.get('full_name')
             owner_info.owner_name = owner_data.get('full_name')  # Legacy field
 
-            # Phone fields
+            # Phone fields - individual
             owner_info.phone_primary = owner_data.get('phone_primary')
             owner_info.phone_mobile = owner_data.get('phone_mobile')
             owner_info.phone_secondary = owner_data.get('phone_secondary')
             owner_info.phone = owner_data.get('phone_primary')  # Legacy field
+            owner_info.phone_count = owner_data.get('phone_count', 0)
+            owner_info.phone_list = owner_data.get('phone_list')  # Full JSONB list
 
-            # Email fields
+            # Email fields - individual
             owner_info.email_primary = owner_data.get('email_primary')
             owner_info.email_secondary = owner_data.get('email_secondary')
             owner_info.email = owner_data.get('email_primary')  # Legacy field
+            owner_info.email_count = owner_data.get('email_count', 0)
+            owner_info.email_list = owner_data.get('email_list')  # Full JSONB list
 
-            # Mailing address
+            # Mailing address - full details
             owner_info.mailing_street = owner_data.get('mailing_street')
             owner_info.mailing_city = owner_data.get('mailing_city')
             owner_info.mailing_state = owner_data.get('mailing_state')
             owner_info.mailing_zip = owner_data.get('mailing_zip')
+            owner_info.mailing_zip_plus4 = owner_data.get('mailing_zip_plus4')
+            owner_info.mailing_county = owner_data.get('mailing_county')
+            owner_info.mailing_validity = owner_data.get('mailing_validity')
             owner_info.mailing_full_address = owner_data.get('mailing_full_address')
             owner_info.mailing_address = owner_data.get('mailing_full_address')  # Legacy field
 
             # Owner details
-            owner_info.owner_type = owner_data.get('owner_type', 'Unknown')
+            owner_info.owner_type = owner_data.get('owner_type', 'Individual')
             owner_info.owner_occupied = owner_data.get('owner_occupied')
+
+            # Compliance flags (critical for cold calling)
+            owner_info.is_deceased = owner_data.get('is_deceased', False)
+            owner_info.is_litigator = owner_data.get('is_litigator', False)
+            owner_info.has_dnc = owner_data.get('has_dnc', False)
+            owner_info.has_tcpa = owner_data.get('has_tcpa', False)
+            owner_info.tcpa_blacklisted = owner_data.get('tcpa_blacklisted', False)
+
+            # Bankruptcy and lien info
+            owner_info.has_bankruptcy = owner_data.get('has_bankruptcy', False)
+            owner_info.bankruptcy_info = owner_data.get('bankruptcy_info')
+            owner_info.has_involuntary_lien = owner_data.get('has_involuntary_lien', False)
+            owner_info.lien_info = owner_data.get('lien_info')
+
+            # Property ID from skip trace
+            owner_info.skip_trace_property_id = owner_data.get('property_id')
+
+        # Store all persons (up to 3 from BatchData)
+        if result.get('all_persons'):
+            owner_info.all_persons = result.get('all_persons')
+
+        # Store raw response for debugging
+        if result.get('raw_response'):
+            owner_info.raw_response = result.get('raw_response')
 
         db.add(owner_info)
         db.commit()
@@ -1324,7 +1588,7 @@ async def get_skip_trace_results(
             formatted_results.append({
                 "property_id": prop.id,
                 "address": {
-                    "street": prop.street,
+                    "street": prop.street_address,
                     "city": prop.city,
                     "state": prop.state,
                     "zip": prop.postal_code,
@@ -1343,20 +1607,38 @@ async def get_skip_trace_results(
                         "phone_primary": owner.phone_primary,
                         "phone_mobile": owner.phone_mobile,
                         "phone_secondary": owner.phone_secondary,
+                        "phone_count": owner.phone_count,
+                        "phone_list": owner.phone_list,  # Full list with carrier, DNC, TCPA, score
                         "email_primary": owner.email_primary,
-                        "email_secondary": owner.email_secondary
+                        "email_secondary": owner.email_secondary,
+                        "email_count": owner.email_count,
+                        "email_list": owner.email_list  # Full list with tested status
                     },
                     "mailing_address": {
                         "street": owner.mailing_street,
                         "city": owner.mailing_city,
                         "state": owner.mailing_state,
                         "zip": owner.mailing_zip,
+                        "zip_plus4": owner.mailing_zip_plus4,
+                        "county": owner.mailing_county,
+                        "validity": owner.mailing_validity,
                         "full": owner.mailing_full_address
+                    },
+                    "compliance": {
+                        "is_deceased": owner.is_deceased,
+                        "is_litigator": owner.is_litigator,
+                        "has_dnc": owner.has_dnc,
+                        "has_tcpa": owner.has_tcpa,
+                        "tcpa_blacklisted": owner.tcpa_blacklisted,
+                        "has_bankruptcy": owner.has_bankruptcy,
+                        "has_involuntary_lien": owner.has_involuntary_lien
                     },
                     "details": {
                         "owner_type": owner.owner_type,
-                        "owner_occupied": owner.owner_occupied
+                        "owner_occupied": owner.owner_occupied,
+                        "skip_trace_property_id": owner.skip_trace_property_id
                     },
+                    "all_persons": owner.all_persons,  # Up to 3 persons from BatchData
                     "metadata": {
                         "source": owner.source,
                         "confidence": owner.confidence_score,

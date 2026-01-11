@@ -18,7 +18,7 @@ class GISRiskService:
     """
     GIS-based risk analysis service
     Integrates multiple public GIS datasets to assess property risks
-    
+
     Note: Many government APIs may be blocked by network restrictions.
     This version includes fallback methods and alternative data sources.
     """
@@ -26,23 +26,46 @@ class GISRiskService:
     def __init__(self):
         """Initialize GIS service"""
         self.session = self._create_session()
-        
+
         # Known flood-prone regions in Florida (for fallback)
         self.florida_high_flood_counties = [
-            'miami-dade', 'broward', 'monroe', 'collier', 'lee', 
+            'miami-dade', 'broward', 'monroe', 'collier', 'lee',
             'charlotte', 'manatee', 'pinellas', 'hillsborough'
         ]
 
+        # County Property Appraiser URLs for legal descriptions
+        self.county_appraiser_apis = {
+            'lee': 'https://www.leepa.org/Search/PropertySearch.aspx',
+            'collier': 'https://www.collierappraiser.com/',
+            'charlotte': 'https://www.ccappraiser.com/',
+        }
+
     def _create_session(self):
-        """Create a requests session with retry logic"""
+        """Create a requests session with retry logic and SSL configuration"""
+        import ssl
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.ssl_ import create_urllib3_context
+
         session = requests.Session()
         session.headers.update({
             'User-Agent': 'PropertyRiskAnalysis/2.0'
         })
+
+        # Custom SSL context for government APIs (FEMA requires TLS 1.2+)
+        class SSLAdapter(HTTPAdapter):
+            def init_poolmanager(self, *args, **kwargs):
+                context = create_urllib3_context()
+                context.load_default_certs()
+                context.set_ciphers('DEFAULT@SECLEVEL=1')
+                context.minimum_version = ssl.TLSVersion.TLSv1_2
+                kwargs['ssl_context'] = context
+                return super().init_poolmanager(*args, **kwargs)
+
+        session.mount('https://', SSLAdapter())
         return session
 
-    def analyze_property(self, latitude: float, longitude: float, 
-                        address: str = None, city: str = None, 
+    def analyze_property(self, latitude: float, longitude: float,
+                        address: str = None, city: str = None,
                         state: str = None) -> Dict:
         """
         Comprehensive property risk analysis
@@ -65,7 +88,9 @@ class GISRiskService:
             flood_zone = self.check_flood_zone(latitude, longitude, city, state)
             slope = self.check_slope(latitude, longitude, state)
             road_access = self.check_road_access(latitude, longitude)
-            landlocked = self.check_landlocked(latitude, longitude)
+            # CRITICAL: landlocked is simply the inverse of road_access
+            # If has_access=True, then landlocked=False, and vice versa
+            landlocked = not road_access.get("has_access", True)
             protected_land = self.check_protected_land(latitude, longitude)
 
             # Calculate overall risk
@@ -114,21 +139,57 @@ class GISRiskService:
                 "error": str(e)
             }
 
-    def check_wetlands(self, latitude: float, longitude: float, 
+    def check_wetlands(self, latitude: float, longitude: float,
                       state: str = None) -> Dict:
         """
         Check if property is in or near wetlands
-        
-        Primary: USFWS Wetlands Mapper API
-        Fallback: Geographic heuristics for Florida
+
+        Primary: ESRI Living Atlas USA Wetlands (most reliable free API)
+        Fallback: USFWS NWI Direct
+        Final fallback: Geographic heuristics for Florida
         """
-        # Try USFWS API
+        # Try ESRI Living Atlas USA Wetlands (RECOMMENDED - No API key required)
         try:
-            # USFWS NWI (National Wetlands Inventory) REST API
-            url = "https://www.fws.gov/wetlands/arcgis/rest/services/Wetlands/MapServer/0/query"
-            
+            url = "https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_Wetlands/FeatureServer/0/query"
+
             params = {
-                "geometry": f"{longitude},{latitude}",
+                "geometry": f'{{"x":{longitude},"y":{latitude},"spatialReference":{{"wkid":4326}}}}',
+                "geometryType": "esriGeometryPoint",
+                "inSR": "4326",
+                "spatialRel": "esriSpatialRelIntersects",
+                "outFields": "WETLAND_TYPE",
+                "returnGeometry": "false",
+                "f": "json"
+            }
+
+            response = self.session.get(url, params=params, timeout=15)
+
+            if response.status_code == 200:
+                data = response.json()
+                logger.debug(f"ESRI Wetlands response: {data}")
+                if data.get("features") and len(data["features"]) > 0:
+                    wetland_type = data["features"][0]["attributes"].get("WETLAND_TYPE", "Unknown")
+                    return {
+                        "status": True,
+                        "type": wetland_type,
+                        "confidence": "HIGH",
+                        "source": "ESRI Living Atlas (USFWS NWI)"
+                    }
+                else:
+                    return {
+                        "status": False,
+                        "confidence": "HIGH",
+                        "source": "ESRI Living Atlas (USFWS NWI)"
+                    }
+        except Exception as e:
+            logger.warning(f"ESRI Living Atlas API error: {str(e)}")
+
+        # Try USFWS Direct API (alternative)
+        try:
+            url = "https://fwspublicservices.wim.usgs.gov/wetlandsmapservice/rest/services/Wetlands/MapServer/0/query"
+
+            params = {
+                "geometry": f'{{"x":{longitude},"y":{latitude},"spatialReference":{{"wkid":4326}}}}',
                 "geometryType": "esriGeometryPoint",
                 "inSR": "4326",
                 "spatialRel": "esriSpatialRelIntersects",
@@ -136,26 +197,27 @@ class GISRiskService:
                 "returnGeometry": "false",
                 "f": "json"
             }
-            
-            response = self.session.get(url, params=params, timeout=10)
-            
+
+            response = self.session.get(url, params=params, timeout=15)
+
             if response.status_code == 200:
                 data = response.json()
-                if data.get("features"):
+                logger.debug(f"USFWS Direct response: {data}")
+                if data.get("features") and len(data["features"]) > 0:
                     return {
                         "status": True,
                         "type": data["features"][0]["attributes"].get("WETLAND_TYPE", "Unknown"),
                         "confidence": "HIGH",
-                        "source": "USFWS NWI"
+                        "source": "USFWS NWI Direct"
                     }
                 else:
                     return {
                         "status": False,
                         "confidence": "HIGH",
-                        "source": "USFWS NWI"
+                        "source": "USFWS NWI Direct"
                     }
         except Exception as e:
-            logger.debug(f"USFWS API error: {str(e)}")
+            logger.debug(f"USFWS Direct API error: {str(e)}")
         
         # Fallback: Geographic analysis for Florida
         if state and state.upper() == "FL":
@@ -181,32 +243,34 @@ class GISRiskService:
         Check FEMA flood zone with improved accuracy
 
         Tries multiple FEMA APIs in order:
-        1. FEMA NFHL (National Flood Hazard Layer) - Most accurate
-        2. FEMA MSC (Map Service Center) - Alternative source
-        3. Geographic heuristics - Fallback
+        1. ESRI Living Atlas FEMA Flood Hazards (Most reliable)
+        2. FEMA NFHL (National Flood Hazard Layer) - Official source
+        3. FEMA MSC (Map Service Center) - Alternative source
+        4. Geographic heuristics - Fallback
         """
         api_results = []
 
-        # Try primary FEMA NFHL API - Query Layer 28 (Flood Zones)
+        # Try ESRI Living Atlas FEMA Flood Hazards (more reliable than direct FEMA API)
         try:
-            url = "https://hazards.fema.gov/gis/nfhl/rest/services/public/NFHL/MapServer/28/query"
+            # This ESRI endpoint mirrors FEMA data but has better reliability
+            url = "https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_Flood_Hazard_Reduced_Set_gdb/FeatureServer/0/query"
 
             params = {
                 "geometry": f'{{"x":{longitude},"y":{latitude},"spatialReference":{{"wkid":4326}}}}',
                 "geometryType": "esriGeometryPoint",
                 "inSR": "4326",
                 "spatialRel": "esriSpatialRelIntersects",
-                "outFields": "FLD_ZONE,ZONE_SUBTY,SFHA_TF,FLD_AR_ID",
+                "outFields": "FLD_ZONE,ZONE_SUBTY,SFHA_TF",
                 "returnGeometry": "false",
                 "f": "json"
             }
 
-            response = self.session.get(url, params=params, timeout=15)
-            logger.debug(f"FEMA NFHL request: {url}?{params}")
+            response = self.session.get(url, params=params, timeout=20)
+            logger.debug(f"ESRI FEMA Flood request: {url}")
 
             if response.status_code == 200:
                 data = response.json()
-                logger.debug(f"FEMA NFHL response: {data}")
+                logger.debug(f"ESRI FEMA Flood response: {data}")
 
                 if data.get("features") and len(data["features"]) > 0:
                     feature = data["features"][0]
@@ -223,21 +287,21 @@ class GISRiskService:
 
                     severity = self._classify_flood_zone(zone, sfha)
 
-                    logger.info(f"FEMA NFHL returned zone: {full_zone}, SFHA: {sfha}")
+                    logger.info(f"ESRI FEMA Flood returned zone: {full_zone}, SFHA: {sfha}")
 
                     return {
                         "zone": full_zone,
                         "severity": severity,
                         "in_sfha": sfha == "T",
                         "confidence": "HIGH",
-                        "source": "FEMA NFHL (Verified)"
+                        "source": "ESRI Living Atlas (FEMA Data)"
                     }
                 else:
-                    logger.debug(f"FEMA NFHL returned no features for {latitude}, {longitude}")
-                    api_results.append(("NFHL", "no_data"))
+                    logger.debug(f"ESRI FEMA returned no features for {latitude}, {longitude}")
+                    api_results.append(("ESRI_FEMA", "no_data"))
         except Exception as e:
-            logger.warning(f"FEMA NFHL API error: {str(e)}")
-            api_results.append(("NFHL", f"error: {str(e)}"))
+            logger.warning(f"ESRI FEMA Flood API error: {str(e)}")
+            api_results.append(("ESRI_FEMA", f"error: {str(e)}"))
         
         # Alternative FEMA endpoint
         try:
@@ -516,7 +580,7 @@ class GISRiskService:
             return "LOW"
 
     def check_road_access(self, latitude: float, longitude: float,
-                          distance_threshold: int = 100) -> Dict:
+                          distance_threshold: int = 200) -> Dict:
         """
         Check road access
         
@@ -663,34 +727,53 @@ class GISRiskService:
             "source": "Unable to verify (API unavailable)"
         }
 
-    def _calculate_overall_risk(self, wetlands, flood_zone, slope, 
+    def _calculate_overall_risk(self, wetlands, flood_zone, slope,
                                 road_access, landlocked, protected_land) -> str:
         """
         Calculate overall property risk level
-        
+
+        CRITICAL RULES:
+        1. HIGH flood zone = HIGH risk (immediate disqualifier)
+        2. Landlocked property = HIGH risk (immediate disqualifier)
+        3. If has_access=True, then landlocked MUST be False
+
         Returns: "LOW", "MEDIUM", "HIGH", or "UNKNOWN"
         """
         risk_score = 0
         confidence_penalties = 0
-        
+
+        # CRITICAL: HIGH flood zone automatically makes property HIGH risk
+        flood_severity = flood_zone.get("severity", "LOW")
+        if flood_severity == "HIGH":
+            logger.info("⚠️  HIGH FLOOD ZONE detected - Setting risk to HIGH")
+            return "HIGH"
+
+        # CRITICAL: Landlocked property automatically makes it HIGH risk
+        # Landlocked means NO road access - property is inaccessible
+        if landlocked or not road_access.get("has_access", True):
+            logger.info("⚠️  LANDLOCKED property (no road access) - Setting risk to HIGH")
+            return "HIGH"
+
+        # If property has road access, it CANNOT be landlocked
+        if road_access.get("has_access", True) and landlocked:
+            logger.warning("⚠️  Inconsistency: Property has road access but marked landlocked. Correcting landlocked to False.")
+            landlocked = False
+
         # Wetlands (+2 if present)
         if wetlands.get("status"):
             risk_score += 2
         if wetlands.get("confidence") != "HIGH":
             confidence_penalties += 1
-        
-        # Flood zone (0-3 points)
-        flood_severity = flood_zone.get("severity", "LOW")
-        if flood_severity == "HIGH":
-            risk_score += 3
-        elif flood_severity == "MEDIUM":
+
+        # Flood zone (0-2 points) - HIGH already handled above
+        if flood_severity == "MEDIUM":
             risk_score += 2
         elif flood_severity == "UNKNOWN":
             confidence_penalties += 1
-        
+
         if flood_zone.get("confidence") != "HIGH":
             confidence_penalties += 1
-        
+
         # Slope (0-2 points)
         slope_severity = slope.get("severity", "LOW")
         if slope_severity == "HIGH":
@@ -699,21 +782,17 @@ class GISRiskService:
             risk_score += 1
         elif slope_severity == "UNKNOWN":
             confidence_penalties += 1
-        
-        # Road access / landlocked (+3 if landlocked)
-        if landlocked or not road_access.get("has_access", True):
-            risk_score += 3
-        
+
         # Protected land (+2 if protected)
         if protected_land.get("is_protected"):
             risk_score += 2
-        
+
         # If too many unknowns, return UNKNOWN
         if confidence_penalties >= 3:
             return "UNKNOWN"
-        
+
         # Classify overall risk
-        if risk_score >= 6:
+        if risk_score >= 5:
             return "HIGH"
         elif risk_score >= 3:
             return "MEDIUM"

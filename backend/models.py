@@ -59,8 +59,7 @@ class Property(Base):
     lot_size_sqft = Column(Float)
 
     # Original CSV data preservation (stores entire row as JSON)
-    # TODO: Uncomment after running: python migrate_original_data.py
-    # original_data = Column(JSONB)
+    original_data = Column(JSONB)
 
     created_at = Column(DateTime, server_default=func.current_timestamp())
 
@@ -142,6 +141,15 @@ class AIAnalysisResult(Base):
     nearby_dev_type = Column(String(50))
     nearby_dev_count = Column(Integer)
     nearby_dev_confidence = Column(Float)
+    nearby_dev_details = Column(Text)
+
+    # Nearby structures (detailed breakdown)
+    structures_detected = Column(Boolean, default=False)
+    structures_count = Column(Integer)
+    structures_types = Column(Text)  # JSON array of types
+    structures_density = Column(String(20))
+    structures_confidence = Column(Float)
+    structures_details = Column(Text)
 
     # Overall AI risk
     ai_risk_level = Column(String(10))
@@ -197,19 +205,45 @@ class PropertyOwnerInfo(Base):
     phone_primary = Column(String(50))
     phone_mobile = Column(String(50))
     phone_secondary = Column(String(50))
+    phone_count = Column(Integer)
+    phone_list = Column(JSONB)  # Full list with all phone details
 
     # Contact - Email
     email = Column(String(255))  # Legacy field
     email_primary = Column(String(255))
     email_secondary = Column(String(255))
+    email_count = Column(Integer)
+    email_list = Column(JSONB)  # Full list with all email details
 
     # Mailing Address
     mailing_address = Column(Text)  # Legacy field
     mailing_street = Column(Text)
     mailing_city = Column(String(255))
-    mailing_state = Column(String(2))
+    mailing_state = Column(String(10))
     mailing_zip = Column(String(20))
+    mailing_zip_plus4 = Column(String(10))
+    mailing_county = Column(String(255))
+    mailing_validity = Column(String(50))
     mailing_full_address = Column(Text)
+
+    # All persons from skip trace (up to 3)
+    all_persons = Column(JSONB)
+
+    # Compliance Flags (important for cold calling)
+    is_deceased = Column(Boolean, default=False)
+    is_litigator = Column(Boolean, default=False)
+    has_dnc = Column(Boolean, default=False)  # Do Not Call
+    has_tcpa = Column(Boolean, default=False)  # TCPA blacklisted
+    tcpa_blacklisted = Column(Boolean, default=False)
+
+    # Bankruptcy and Lien info
+    has_bankruptcy = Column(Boolean, default=False)
+    bankruptcy_info = Column(JSONB)
+    has_involuntary_lien = Column(Boolean, default=False)
+    lien_info = Column(JSONB)
+
+    # Property info from skip trace
+    skip_trace_property_id = Column(String(255))
 
     # Metadata
     source = Column(String(100))
@@ -222,3 +256,6 @@ class PropertyOwnerInfo(Base):
     # Additional fields for tracking retries
     retry_count = Column(Integer, default=0)
     last_retry_at = Column(DateTime)
+
+    # Raw API response for debugging
+    raw_response = Column(JSONB)

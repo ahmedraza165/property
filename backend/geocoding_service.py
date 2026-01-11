@@ -8,13 +8,18 @@ logger = logging.getLogger(__name__)
 
 class GeocodingService:
     """
-    Robust geocoding service with multiple fallback providers
+    Robust geocoding service with multiple fallback providers (Florida-focused)
 
     Providers (in order of priority):
     1. US Census Geocoder (free, no API key)
     2. OpenStreetMap Nominatim (free, no API key)
-    3. Geographic estimation (fallback for known areas)
     """
+
+    # US State name to abbreviation mapping (Florida-focused)
+    STATE_ABBREVIATIONS = {
+        'florida': 'FL',
+        'fl': 'FL'
+    }
 
     def __init__(self):
         self.census_url = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
@@ -24,25 +29,25 @@ class GeocodingService:
             'User-Agent': 'PropertyAnalysisService/2.0'
         })
 
-        # ZIP code to approximate coordinates mapping (Florida focus)
-        self.zip_coordinates = self._load_zip_coordinates()
+    def _normalize_state(self, state: str) -> str:
+        """Convert state name to 2-letter abbreviation"""
+        if not state:
+            return "FL"  # Default to Florida
 
-    def _load_zip_coordinates(self) -> Dict[str, Tuple[float, float]]:
-        """Load approximate coordinates for common ZIP codes"""
-        return {
-            # Southwest Florida
-            "33971": (26.6254, -81.6437),  # Lehigh Acres
-            "33976": (26.5731, -81.6881),  # Lehigh Acres
-            "33974": (26.6531, -81.6209),  # Lehigh Acres
-            "33972": (26.5920, -81.6570),  # Lehigh Acres
-            "33973": (26.5731, -81.6881),  # Lehigh Acres
-            # Add more as needed
-        }
+        state_clean = state.strip().lower()
+
+        # Return abbreviation if already abbreviated
+        if len(state_clean) == 2:
+            return state_clean.upper()
+
+        # Convert full name to abbreviation
+        return self.STATE_ABBREVIATIONS.get(state_clean, state_clean.upper()[:2])
 
     def geocode_address(self, street: str, city: str, state: str, zip_code: str) -> Optional[Dict]:
         """
         Geocode an address using multiple providers with fallback
         Returns coordinates and address components including county
+        Florida-focused: Only returns results if geocoding succeeds
         """
         full_address = f"{street}, {city}, {state} {zip_code}"
 
@@ -58,12 +63,7 @@ class GeocodingService:
             logger.info(f"Geocoded via Nominatim: {full_address}")
             return result
 
-        # Try ZIP code approximation
-        result = self._try_zip_approximation(street, city, state, zip_code, full_address)
-        if result:
-            logger.info(f"Geocoded via ZIP approximation: {full_address}")
-            return result
-
+        # No fallback - return None if geocoding fails
         logger.warning(f"All geocoding methods failed for: {full_address}")
         return None
 
@@ -92,7 +92,7 @@ class GeocodingService:
                     "full_address": full_address,
                     "street": address_components.get("streetName", street),
                     "city": address_components.get("city", city),
-                    "state": address_components.get("state", state),
+                    "state": self._normalize_state(address_components.get("state", state)),
                     "zip": address_components.get("zip", zip_code),
                     "county": address_components.get("county", None),
                     "accuracy": "HIGH",
@@ -132,7 +132,7 @@ class GeocodingService:
                     "full_address": full_address,
                     "street": street,
                     "city": address_details.get("city") or address_details.get("town") or city,
-                    "state": address_details.get("state", state),
+                    "state": self._normalize_state(address_details.get("state", state)),
                     "zip": address_details.get("postcode", zip_code),
                     "county": address_details.get("county"),
                     "accuracy": "MEDIUM",
@@ -140,35 +140,6 @@ class GeocodingService:
                 }
         except Exception as e:
             logger.debug(f"Nominatim geocoding failed: {str(e)}")
-
-        return None
-
-    def _try_zip_approximation(self, street: str, city: str, state: str,
-                               zip_code: str, full_address: str) -> Optional[Dict]:
-        """Approximate coordinates based on ZIP code"""
-        # Clean ZIP code
-        zip_clean = zip_code.split('-')[0].strip()
-
-        if zip_clean in self.zip_coordinates:
-            lat, lon = self.zip_coordinates[zip_clean]
-
-            # Extract county from city name for Florida
-            county = None
-            if state.upper() == "FL":
-                county = self._estimate_county_fl(city, zip_clean)
-
-            return {
-                "latitude": lat,
-                "longitude": lon,
-                "full_address": full_address,
-                "street": street,
-                "city": city,
-                "state": state,
-                "zip": zip_code,
-                "county": county,
-                "accuracy": "LOW",
-                "source": "ZIP Code Approximation"
-            }
 
         return None
 

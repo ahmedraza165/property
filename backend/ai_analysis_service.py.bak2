@@ -354,99 +354,205 @@ class AIAnalysisService:
             logger.info(f"📤 Sending 3-image unified analysis request...")
 
             # COMPREHENSIVE UNIFIED PROMPT - All analysis in one call with 3 images
-            prompt = """Analyze these 3 property images (1 satellite + 2 street views) and describe what you observe.
+            prompt = """You are an EXPERT PROPERTY ANALYST specializing in comprehensive property risk assessment using aerial and ground-level imagery analysis.
 
-IMAGES:
-Image 1: Satellite aerial view (red marker = property)
-Image 2 & 3: Street views from different angles
+🎯 **YOUR MISSION**: Perform a DETAILED, THOROUGH analysis of ALL 3 images to provide accurate property assessment covering infrastructure, access, condition, and surroundings.
 
-Describe what you observe in ALL 3 images for:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📸 **3 IMAGES PROVIDED FOR ANALYSIS**:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-1. POWER LINES (PRIORITY #1):
-   - Satellite: Look for thin lines, poles, cleared corridors near red marker
-   - Street views: Scan sky for overhead wires, look for utility poles with transformers
-   - Position: directly_above / in_front_close / nearby / far / none
-   - IMPORTANT: Power lines = GOOD (infrastructure access available)
+**IMAGE 1 - GOOGLE MAPS SATELLITE (TOP VIEW)**:
+- Aerial view from directly above showing property boundaries, nearby structures, roads, and overhead features
+- Use this for: detecting power line corridors, counting structures, measuring distances, assessing density
 
-2. ROAD CONDITION:
-   - Color: black/dark gray = paved, tan/brown = dirt/gravel
-   - Surface texture and quality from street views
-   - Type: PAVED / GRAVEL / DIRT / POOR / UNKNOWN
+**IMAGE 2 - STREET VIEW (DIRECTION 1)**:
+- Ground-level view from first camera angle
+- Use this for: power poles/lines, road surface quality, property condition, visible infrastructure
 
-3. STRUCTURES (COUNT FROM SATELLITE IMAGE ONLY):
-   - Look at Image 1 (satellite view) ONLY for counting structures
-   - CAREFULLY count EACH individual building/structure with a visible rooftop within 200m of red marker
-   - Count PRECISELY - look at each rooftop one by one
-   - Do NOT estimate or round - if you see 3 houses, say 3. If you see 7, say 7. If you see 23, say 23
-   - Count separately: houses, garages, sheds, barns, commercial buildings, any structure with a roof
-   - After counting, classify density: high (>15 structures), medium (5-15), low (1-4), none (0)
-   - In "details" field, explain: "Counted X houses + Y garages + Z sheds = Total count from satellite image"
+**IMAGE 3 - STREET VIEW (DIRECTION 2)**:
+- Ground-level view from opposite/different camera angle (180° or different heading)
+- Use this for: confirming findings from angle 1, detecting infrastructure missed in first view, complete coverage
 
-4. PROPERTY CONDITION (from street views):
-   - Status: developed / partially_developed / undeveloped
-   - If developed: condition = EXCELLENT / GOOD / AVERAGE / POOR / VACANT
-   - Maintenance: well-kept or overgrown/debris
+**ANALYSIS METHODOLOGY**:
+✓ Examine ALL 3 images carefully before making conclusions
+✓ Cross-reference findings between images to verify accuracy
+✓ If something appears in ANY of the 3 images, include it in your analysis
+✓ Use multiple angles to eliminate blind spots and false negatives
+✓ Provide specific details about WHAT you see and WHERE (which image)
 
-5. AREA TYPE (from satellite):
-   - RESIDENTIAL / COMMERCIAL / INDUSTRIAL / AGRICULTURAL / UNDEVELOPED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔍 **ANALYSIS TASKS** (Analyze thoroughly):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-RESPOND WITH ONLY THIS JSON (no extra text):
+**1. ELECTRICAL INFRASTRUCTURE DETECTION** (TOP PRIORITY):
+
+**IMPORTANT**: Power lines indicate GOOD electrical infrastructure access. Their presence is POSITIVE for development.
+
+**FROM SATELLITE IMAGE (Image 1)**:
+- Look for thin dark lines crossing the image (power cables viewed from above)
+- Look for small dots in straight-line patterns (utility poles along streets)
+- Look for cleared vegetation corridors (power line right-of-way)
+- Measure approximate distance from red property marker to nearest visible power infrastructure
+- Note: Cables are VERY thin from satellite - look carefully at all streets
+
+**FROM STREET VIEW ANGLE 1 (Image 2)**:
+- Scan the TOP HALF of image for overhead wires against the sky
+- Look for tall wooden/concrete/metal poles along the street
+- Check for transformers (gray cylinders on poles)
+- Look for crossbars and insulators on poles
+- Identify cable type: overhead distribution lines, thick transmission lines, or service drops to houses
+- Determine position: directly_above (over property), in_front_close (on adjacent street), nearby (visible in distance), or far
+
+**FROM STREET VIEW ANGLE 2 (Image 3)**:
+- Repeat same detailed scan as Angle 1
+- Look for poles or wires that may not be visible in Angle 1
+- Confirm or supplement findings from first street view
+- **CRITICAL**: If you see power infrastructure in EITHER street view angle, mark as VISIBLE
+
+**CROSS-REFERENCE ALL 3 IMAGES**:
+- If poles visible in satellite → there MUST be cables connecting them
+- If poles visible in street view → scan satellite to locate them from above
+- Combine findings from all 3 angles for complete picture
+
+**2. ROAD SURFACE & ACCESS ASSESSMENT**:
+
+**FROM SATELLITE (Image 1)**:
+- Identify road surface type visible from above:
+  * PAVED: Dark gray or black, smooth surface, clear edges, may show lane markings
+  * GRAVEL: Light gray/tan, rougher texture, less defined edges
+  * DIRT: Brown/tan/red earth color, very rough, irregular edges, may show tire tracks
+  * POOR: Paved but with visible cracks, patches, or deterioration
+- Check road width (narrow vs wide)
+- Verify road connects to larger road network
+
+**FROM STREET VIEWS (Images 2 & 3)**:
+- Examine road surface at ground level in BOTH angles:
+  * Look at immediate foreground and road surface texture
+  * Check for asphalt/concrete (paved), gravel stones, or dirt/mud
+  * Identify potholes, cracks, or damage
+  * Assess maintenance quality (well-maintained vs deteriorating)
+- Use the CLEARER view from either angle for final determination
+- Cross-check: Does street view match satellite observation?
+
+**3. PROPERTY & SURROUNDING AREA ANALYSIS**:
+
+**FROM SATELLITE (Image 1)**:
+- **Count ALL visible structures** in the surrounding area:
+  * Houses/residences (rectangular buildings with roofs)
+  * Garages, sheds, outbuildings (smaller structures)
+  * Driveways and parking areas (light-colored rectangles)
+  * Swimming pools (blue rectangles in yards)
+  * Commercial/industrial buildings (larger structures)
+- **Assess density**: high (many structures close together), medium (scattered), low (few structures), none (no development)
+- **Identify area type**: RESIDENTIAL (homes), COMMERCIAL (shops/offices), INDUSTRIAL (warehouses/factories), AGRICULTURAL (farms/fields), UNDEVELOPED (empty land/forest)
+- Look at property marked with red pin: Is there a structure on it? What's on adjacent lots?
+
+**FROM STREET VIEWS (Images 2 & 3)**:
+- **Property condition** at the photographed location:
+  * EXCELLENT: Well-maintained, modern, clean
+  * GOOD: Maintained, average condition
+  * AVERAGE: Some wear, typical condition
+  * POOR: Neglected, damaged, deteriorating
+  * VACANT: Empty lot or abandoned structure
+  * UNDEVELOPED: Natural vegetation, no improvements
+- **Vegetation**: Overgrown/wild vs maintained/cleared vs natural forest
+- **Signs of activity**: Lived-in, active use vs abandoned vs construction
+- **Surroundings**: Neighboring properties condition, street character
+- Combine observations from BOTH street angles for complete assessment
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 **OUTPUT REQUIREMENTS**:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Respond with ONLY this JSON format (no other text):
 
 {
-  "power_lines_street": {
-    "visible": true/false,
-    "confidence": 0.0-1.0,
-    "type": "overhead_lines|utility_poles|transmission_tower|none",
-    "position": "directly_above|in_front_close|nearby|far|none",
-    "proximity": "very_close|close|moderate|far",
-    "details": "what you see and which image"
-  },
-  "power_lines": {
-    "visible": true/false,
-    "confidence": 0.0-1.0,
-    "distance_meters": number or null,
-    "line_type": "transmission|distribution|single|multiple|none",
-    "details": "description from satellite"
-  },
-  "road_condition": {
-    "type": "PAVED|GRAVEL|DIRT|POOR|UNKNOWN",
-    "confidence": 0.0-1.0,
-    "details": "description"
-  },
-  "nearby_structures": {
-    "structures_detected": true/false,
-    "count": EXACT_NUMBER_YOU_COUNTED,
-    "types": ["house", "garage", "shed", "barn", "commercial"],
-    "density": "high|medium|low|none",
-    "confidence": 0.0-1.0,
-    "details": "Counted X houses + Y garages + Z other = TOTAL from satellite image"
-  },
-  "property_condition": {
-    "condition": "EXCELLENT|GOOD|AVERAGE|POOR|VACANT|UNDEVELOPED",
-    "maintained": true/false,
-    "development_status": "developed|partially_developed|undeveloped",
-    "concerns": ["list any issues"],
-    "confidence": 0.0-1.0,
-    "details": "description"
-  },
-  "nearby_development": {
-    "type": "RESIDENTIAL|COMMERCIAL|INDUSTRIAL|AGRICULTURAL|UNDEVELOPED",
-    "count": number,
-    "confidence": 0.0-1.0,
-    "details": "area description"
-  },
-  "key_insights": [
-    "Most critical finding about infrastructure or access",
-    "Second important finding",
-    "Third notable observation"
-  ]
+    "power_lines_street": {
+        "visible": true/false,
+        "confidence": 0.0-1.0,
+        "type": "overhead_lines|utility_poles|transmission_tower|none",
+        "position": "directly_above|in_front_close|nearby|far|none",
+        "proximity": "very_close|close|moderate|far",
+        "details": "Detailed description of what you see from street view"
+    },
+    "power_lines": {
+        "visible": true/false,
+        "confidence": 0.0-1.0,
+        "distance_meters": number or null,
+        "line_type": "transmission|distribution|single|multiple|none",
+        "details": "Detailed description of what you see from satellite view"
+    },
+    "road_condition": {
+        "type": "PAVED|GRAVEL|DIRT|POOR|UNKNOWN",
+        "confidence": 0.0-1.0,
+        "details": "Description combining both satellite and street view observations"
+    },
+    "nearby_structures": {
+        "structures_detected": true/false,
+        "count": number,
+        "types": ["house", "garage", "shed", etc],
+        "density": "high|medium|low|none",
+        "confidence": 0.0-1.0,
+        "details": "Description of structures visible in satellite view"
+    },
+    "property_condition": {
+        "condition": "EXCELLENT|GOOD|AVERAGE|POOR|VACANT|UNDEVELOPED",
+        "maintained": true/false,
+        "development_status": "developed|partially_developed|undeveloped",
+        "concerns": ["list of concerns if any"],
+        "confidence": 0.0-1.0,
+        "details": "Description of property condition from street view"
+    },
+    "nearby_development": {
+        "type": "RESIDENTIAL|COMMERCIAL|INDUSTRIAL|AGRICULTURAL|UNDEVELOPED",
+        "count": number,
+        "confidence": 0.0-1.0,
+        "details": "Description of surrounding development from satellite"
+    },
+    "key_insights": [
+        "INSIGHT 1: [State the MOST CRITICAL finding - electrical infrastructure status, access issues, or major concerns. Be specific: 'Power lines visible on adjacent street - excellent utility access' or 'No electrical infrastructure detected - utility installation required']",
+        "INSIGHT 2: [Second most important finding - road condition, property condition, or development context. Example: 'Well-maintained paved road with good access' or 'Property in undeveloped area with limited services']",
+        "INSIGHT 3: [Third notable observation - surrounding area, density, or other factors affecting value/development. Example: 'Low-density residential area with similar properties' or 'High-density development with nearby amenities']"
+    ]
 }
 
-IMPORTANT RULES:
-- Be specific in details - mention which image shows what
-- High confidence (0.8+) if visible in multiple images
-- For structure count: COUNT PRECISELY from satellite image - do not estimate or use round numbers like 10
-- If you count 3 structures, write 3. If 17, write 17. NEVER default to generic numbers."""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ **CRITICAL REQUIREMENTS**:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. **EXAMINE ALL 3 IMAGES THOROUGHLY**:
+   - Look at satellite (Image 1), street angle 1 (Image 2), and street angle 2 (Image 3)
+   - Do NOT make conclusions based on just 1 or 2 images
+   - Use all 3 angles to eliminate blind spots
+
+2. **CROSS-REFERENCE BETWEEN IMAGES**:
+   - What you see in satellite should correlate with street views
+   - What you see in one street angle should be considered alongside the other angle
+   - If infrastructure appears in ANY image, mark as detected
+
+3. **BE DETAILED AND SPECIFIC**:
+   - In "details" fields, describe EXACTLY what you observe
+   - State WHICH image(s) show the feature: "Visible in Image 2 and 3" or "Detected in satellite (Image 1)"
+   - Provide measurements, counts, positions when possible
+
+4. **KEY INSIGHTS MUST BE ACTIONABLE**:
+   - Write clear, specific insights a property buyer/developer would need
+   - Focus on: electrical access, road quality, area development, property condition
+   - Use concrete language: "Power lines on adjacent street within 30m" NOT "Some infrastructure nearby"
+   - Highlight both positives (good access) and concerns (missing utilities)
+
+5. **ELECTRICAL INFRASTRUCTURE IS PRIORITY #1**:
+   - Check ALL 3 images carefully for poles, wires, cables
+   - Remember: Power lines = GOOD (infrastructure access), No power lines = CONCERN (installation needed)
+   - Be thorough - missing infrastructure is expensive to install
+
+6. **CONFIDENCE LEVELS**:
+   - Set high confidence (0.8-1.0) when features are clearly visible in multiple images
+   - Set medium confidence (0.5-0.7) when visible but unclear or in only 1 image
+   - Set low confidence (0.1-0.4) when difficult to determine
+
+**NOW BEGIN YOUR ANALYSIS**. Respond with ONLY the JSON object specified above. No additional text before or after the JSON.
 
             headers = {
                 "Content-Type": "application/json",
@@ -1351,6 +1457,84 @@ Respond ONLY with JSON:
         """Old prompt removed."""
         # Old method disabled - was causing syntax errors with emojis
         return None
+
+        payload = {
+            "model": "gpt-4o",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {
+                        "url": f"data:image/jpeg;base64,{image_b64}",
+                        "detail": "high"
+                    }}
+                ]
+            }],
+            "max_tokens": 400,
+            "temperature": 0.1
+        }
+
+        # Use the retry method
+        result = self._call_openai_with_retry(
+            "https://api.openai.com/v1/chat/completions",
+            headers,
+            payload
+        )
+
+        if not result:
+            return {
+                "visible": False,
+                "confidence": 0.0,
+                "distance_meters": None,
+                "detections": [],
+                "source": "api_failed"
+            }
+
+        content = result['choices'][0]['message']['content']
+
+        try:
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0].strip()
+
+            parsed = json.loads(content)
+
+            # Extract power_lines, road_condition, and development from new combined format
+            power_lines_data = parsed.get('power_lines', parsed)  # Fallback to root if old format
+            road_condition_data = parsed.get('road_condition', {})
+            development_data = parsed.get('development', {})
+
+            # Add metadata
+            power_lines_data["source"] = "openai_vision_satellite"
+            power_lines_data["detections"] = []
+            power_lines_data["satellite_road_condition"] = road_condition_data
+            power_lines_data["satellite_development"] = development_data
+
+            logger.info(f"✅ Satellite analysis SUCCESS")
+            logger.info(f"   🔌 Power Lines: visible={power_lines_data.get('visible')}, "
+                       f"confidence={power_lines_data.get('confidence', 0):.2f}, "
+                       f"distance={power_lines_data.get('distance_meters')}m")
+            logger.info(f"   🛣️  Road (satellite): {road_condition_data.get('type', 'UNKNOWN')}")
+            logger.info(f"   🏘️  Development: {development_data.get('structure_count', 0)} structures, "
+                       f"density={development_data.get('density', 'unknown')}")
+
+            return power_lines_data
+        except json.JSONDecodeError:
+            logger.warning(f"JSON parse failed, using keyword detection")
+            content_lower = content.lower()
+            visible = any(kw in content_lower for kw in [
+                'power line', 'powerline', 'transmission', 'utility pole', 'tower', 'wire'
+            ])
+
+            return {
+                "visible": visible,
+                "confidence": 0.5 if visible else 0.0,
+                "distance_meters": None,
+                "detections": [],
+                "source": "openai_vision_text",
+                "details": content[:200]
+            }
 
     def _detect_development_with_openai(self, image_bytes: bytes) -> Dict[str, any]:
         """Detect nearby development using OpenAI Vision API."""

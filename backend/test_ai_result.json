@@ -1,0 +1,84 @@
+{
+  "road_condition": {
+    "type": "PAVED",
+    "confidence": 0.9,
+    "details": "Dark gray paved road visible in both street view images."
+  },
+  "power_lines": {
+    "visible": true,
+    "confidence": 0.8,
+    "distance_meters": 10,
+    "line_type": "distribution",
+    "details": "Thin lines visible near the red marker in the satellite image.",
+    "source": "unified_satellite"
+  },
+  "power_lines_street": {
+    "visible": true,
+    "confidence": 0.9,
+    "type": "overhead_lines",
+    "position": "directly_above",
+    "proximity": "very_close",
+    "details": "Visible in both street view images, overhead wires are present.",
+    "source": "unified_street"
+  },
+  "nearby_structures": {
+    "structures_detected": true,
+    "count": 10,
+    "types": [
+      "house"
+    ],
+    "density": "medium",
+    "confidence": 0.9,
+    "details": "Multiple houses visible within 200m of the red marker in the satellite image."
+  },
+  "property_condition": {
+    "condition": "UNDEVELOPED",
+    "maintained": false,
+    "development_status": "undeveloped",
+    "concerns": [
+      "overgrown vegetation"
+    ],
+    "confidence": 0.9,
+    "details": "The property appears overgrown and undeveloped in both street view images."
+  },
+  "nearby_development": {
+    "type": "RESIDENTIAL",
+    "count": 10,
+    "confidence": 0.9,
+    "details": "Residential area with multiple houses visible in the satellite image."
+  },
+  "overall_ai_risk": {
+    "level": "MEDIUM",
+    "score": 38.0,
+    "confidence": 0.8833333333333333,
+    "factors": [
+      "\u26a0\ufe0f Power lines directly overhead - Safety clearance required but electrical infrastructure available",
+      "Undeveloped property",
+      "1 concerns identified: overgrown vegetation"
+    ],
+    "power_lines_detected": true,
+    "power_line_confidence": 0.9
+  },
+  "key_insights": [
+    "Power lines are present, indicating good infrastructure access.",
+    "The road is paved, suggesting easy access.",
+    "The property is undeveloped and overgrown, indicating potential for development."
+  ],
+  "imagery": {
+    "satellite": {
+      "url": "https://maps.googleapis.com/maps/api/staticmap?center=26.581144292187,-81.60813552774&zoom=18&size=800x800&maptype=satellite&markers=color:red%7C26.581144292187,-81.60813552774&key=AIzaSyCvEGowI2GNfOgYhDoJj3NKtCTogJNwdhE",
+      "source": "Mapbox Satellite"
+    },
+    "street_view_1": {
+      "url": "https://maps.googleapis.com/maps/api/streetview?size=800x600&location=26.581144292187,-81.60813552774&heading=0&fov=90&pitch=0&key=AIzaSyCvEGowI2GNfOgYhDoJj3NKtCTogJNwdhE",
+      "source": "Google Street View"
+    },
+    "street_view_2": {
+      "url": "https://maps.googleapis.com/maps/api/streetview?size=800x600&location=26.581144292187,-81.60813552774&heading=180&fov=90&pitch=0&key=AIzaSyCvEGowI2GNfOgYhDoJj3NKtCTogJNwdhE",
+      "source": "Google Street View"
+    }
+  },
+  "model_version": "v1.0",
+  "processing_time_seconds": 19.651970863342285,
+  "error": null
+}
